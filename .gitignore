@@ -1,0 +1,25 @@
+.DS_Store
+/target/
+/.settings/
+.commit
+.idea/
+*.iml
+tmp/*log*
+tmp/*docker*
+tmp/pid
+overrideProperties/config/swf.properties
+nohup.out
+database/*db*
+database/*business*
+docs/_build
+src/main/resources/templates/node_modules/
+src/main/resources/scripts/node_modules/
+
+/.gradle/
+.keystore
+
+# Eclipse Core      
+.project
+
+# JDT-specific (Eclipse Java Development Tools)     
+.classpath
