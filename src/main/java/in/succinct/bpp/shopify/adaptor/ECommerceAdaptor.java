@@ -33,6 +33,7 @@ import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.registry.BecknRegistry;
 import in.succinct.bpp.search.adaptor.SearchAdaptor;
 import in.succinct.bpp.shopify.db.model.BecknOrderMeta;
+import in.succinct.bpp.shopify.helpers.ECommerceHelper;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
@@ -42,10 +43,12 @@ import java.util.Map;
 public class ECommerceAdaptor extends CommerceAdaptor {
     final SearchAdaptor searchAdaptor;
     final Map<String,String> configuration ;
+    final ECommerceHelper helper ;
     public ECommerceAdaptor(Map<String,String> configuration, Subscriber subscriber, BecknRegistry registry){
         super(subscriber,registry);
         this.searchAdaptor = new SearchAdaptor(this);
         this.configuration = configuration;
+        this.helper = new ECommerceHelper(this);
     }
 
     public Map<String, String> getConfiguration() {
@@ -62,6 +65,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     public void _search(Request request, Request reply) {
         /* Code here logic to seach your ecommerce application like woocommerce,shopify, ...*/
         /* Return reply compatible with on_search json */
+        Message message = helper.createMessage(reply);
+        Catalog catalog = helper.createCatalog(message);
+
     }
 
     @Override
