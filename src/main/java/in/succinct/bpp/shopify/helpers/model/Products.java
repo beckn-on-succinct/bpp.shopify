@@ -1,5 +1,6 @@
 package in.succinct.bpp.shopify.helpers.model;
 
+import com.venky.core.string.StringUtil;
 import com.venky.core.util.ObjectUtil;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjectsWithId;
@@ -193,5 +194,35 @@ public class Products extends BecknObjectsWithId<Product> {
         }
         
         
+    }
+    public static class InventoryLevels extends BecknObjectsWithId<InventoryLevel> {
+
+        public InventoryLevels() {
+        }
+
+        public InventoryLevels(JSONArray array) {
+            super(array);
+        }
+    }
+    public static class InventoryLevel extends ShopifyObjectWithId {
+        public InventoryLevel(){
+            super();
+        }
+        public InventoryLevel(JSONObject level){
+            super(level);
+        }
+
+        public long getInventoryItemId(){
+            return getLong("inventory_item_id");
+        }
+        public long getLocationId(){
+            return getLong("location_id");
+        }
+
+        public boolean isAvailable(){
+            return get("available") == null || (Double)get("available") > 0.0D;
+        }
+
+
     }
 }

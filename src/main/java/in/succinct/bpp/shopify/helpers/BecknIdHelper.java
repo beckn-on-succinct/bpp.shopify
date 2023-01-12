@@ -20,7 +20,8 @@ public class BecknIdHelper {
         catalog,
         cancellation_reason,
         return_reason,
-        order
+        order,
+        payment
     }
 
 

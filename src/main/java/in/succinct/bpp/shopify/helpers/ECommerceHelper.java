@@ -2,6 +2,7 @@ package in.succinct.bpp.shopify.helpers;
 
 import com.venky.cache.Cache;
 import com.venky.core.collections.IgnoreCaseMap;
+import com.venky.core.string.StringUtil;
 import com.venky.core.util.ObjectUtil;
 import com.venky.swf.db.Database;
 import com.venky.swf.db.JdbcTypeHelper.TypeConverter;
@@ -42,12 +43,13 @@ import in.succinct.beckn.Quote;
 import in.succinct.beckn.Request;
 import in.succinct.beckn.Tags;
 import in.succinct.beckn.User;
-import in.succinct.bpp.search.db.model.ProviderLocation;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 import in.succinct.bpp.shopify.helpers.BecknIdHelper.Entity;
+import in.succinct.bpp.shopify.helpers.model.ProductImages;
+import in.succinct.bpp.shopify.helpers.model.ProductImages.ProductImage;
 import in.succinct.bpp.shopify.helpers.model.Products;
-import in.succinct.bpp.shopify.helpers.model.Products.InventoryItem;
-import in.succinct.bpp.shopify.helpers.model.Products.InventoryItems;
+import in.succinct.bpp.shopify.helpers.model.Products.InventoryLevel;
+import in.succinct.bpp.shopify.helpers.model.Products.InventoryLevels;
 import in.succinct.bpp.shopify.helpers.model.Products.Product;
 import in.succinct.bpp.shopify.helpers.model.Products.ProductVariant;
 import in.succinct.bpp.shopify.helpers.model.Store;
@@ -56,8 +58,9 @@ import org.json.simple.JSONAware;
 import org.json.simple.JSONObject;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.StringTokenizer;
@@ -131,76 +134,116 @@ public class ECommerceHelper {
         payments.add(payment);
         return payments;
     }
+    private InventoryLevels getInventoryLevels(Provider provider){
+        StringBuilder locationIds = new StringBuilder();
+        for (Iterator <Location> i = provider.getLocations().iterator() ; i .hasNext() ; ) {
+            Location location = i.next();
+            locationIds.append(location.getId());
+            if (i.hasNext()){
+                locationIds.append(",");
+            }
+        }
+        JSONObject input = new JSONObject();
+        input.put("location_ids",locationIds.toString());
+        input.put("limit" , 250);
+
+        InventoryLevels levels = new InventoryLevels();
+        Page<JSONObject> pageInventoryLevels= new Page<>();
+        pageInventoryLevels.next= "/inventory_levels" ;
+        while (pageInventoryLevels.next != null){
+            pageInventoryLevels = getPage(pageInventoryLevels.next,input);
+            JSONArray inventoryLevels = (JSONArray) pageInventoryLevels.data.get("inventory_levels");
+            inventoryLevels.forEach(o->{
+                levels.add(new InventoryLevel((JSONObject)o));
+            });
+            input.remove("location_ids");
+        }
+        return levels;
+    }
     private Items createItems(Provider provider) {
         Items items = new Items();
         provider.setItems(items);
-        String primary_location_id = getStore().getPrimaryLocationId();
-        if (provider.getLocations().size() == 1 ){
-            primary_location_id = provider.getLocations().get(0).getId();
-        }
 
+        InventoryLevels levels = getInventoryLevels(provider);
+        Cache<Long,List<Long>> inventoryLocations = new Cache<>(0,0) {
+            @Override
+            protected List<Long> getValue(Long aLong) {
+                return new ArrayList<>();
+            }
+        };
+        levels.forEach(level-> inventoryLocations.get(level.getInventoryItemId()).add(level.getLocationId()));
+        /*
+        InventoryItems inventoryItems = getInventoryItems(inventoryLocations.keySet());
+        */
         JSONObject input = new JSONObject();
         input.put("limit",250);
-        Page<JSONObject> page = new Page<>();
-        page.next="/products.json";
-        StringBuilder inventoryIds = new StringBuilder();
-        while (page.next != null) {
-            page = getPage(page.next, input);
-            Products products = new Products((JSONArray) page.data.get("products"));
+        Page<JSONObject> productsPage = new Page<>();
+        productsPage.next="/products.json";
+
+        while (productsPage.next != null) {
+            productsPage = getPage(productsPage.next, input);
+            Products products = new Products((JSONArray) productsPage.data.get("products"));
             for (Product product : products) {
                 if (!product.isActive()){
                     continue;
                 }
 
                 for (ProductVariant variant : product.getProductVariants()){
+                    inventoryLocations.get(variant.getInventoryItemId()).forEach(location_id ->{
 
-                    Item item  = new Item();
-                    item.setId(String.valueOf(variant.getInventoryItemId()));
-                    inventoryIds.append(variant.getInventoryItemId()).append(",");
+                        Item item  = new Item();
+                        item.setId(BecknIdHelper.getBecknId(String.valueOf(variant.getInventoryItemId()),adaptor.getSubscriber().getSubscriberId(),Entity.item));
 
-                    Descriptor descriptor = new Descriptor();
-                    item.setDescriptor(descriptor);
-                    descriptor.setCode(variant.getBarCode());
-                    descriptor.setShortDesc(variant.getTitle());
-                    descriptor.setLongDesc(variant.getTitle());
+                        Descriptor descriptor = new Descriptor();
+                        item.setDescriptor(descriptor);
+                        descriptor.setCode(variant.getBarCode());
+                        descriptor.setShortDesc(variant.getTitle());
+                        descriptor.setLongDesc(variant.getTitle());
+                        descriptor.setImages(new Images());
+                        ProductImages productImages = product.getImages();
 
-                    item.setCategoryId(product.getProductType());
-                    item.setCategoryIds(new BecknStrings());
-                    item.getCategoryIds().add(item.getCategoryId());
+                        if (variant.getImageId() > 0){
+                            ProductImage image = productImages.get(StringUtil.valueOf(variant.getImageId()));
+                            if (image != null) {
+                                descriptor.getImages().add(image.getSrc());
+                            }
+                        }else if (productImages.size() > 0){
+                            for (ProductImage i : productImages){
+                                descriptor.getImages().add(i.getSrc());
+                            }
+                        }
+                        item.setCategoryId(BecknIdHelper.getBecknId(product.getProductType(),adaptor.getSubscriber().getSubscriberId(),Entity.category));
+                        item.setCategoryIds(new BecknStrings());
+                        item.getCategoryIds().add(item.getCategoryId());
 
-                    item.setTags(new Tags());
-                    StringTokenizer tokenizer = new StringTokenizer(product.getTags(),",");
-                    while (tokenizer.hasMoreTokens()) {
-                        item.getTags().set(tokenizer.nextToken(),"true");
-                    }
-                    item.setLocationId(primary_location_id);
-                    item.setLocationIds(new BecknStrings());
-                    item.getLocationIds().add(item.getLocationId());
+                        item.setTags(new Tags());
+                        StringTokenizer tokenizer = new StringTokenizer(product.getTags(),",");
+                        while (tokenizer.hasMoreTokens()) {
+                            item.getTags().set(tokenizer.nextToken(),"true");
+                        }
+                        item.setLocationId(BecknIdHelper.getBecknId(StringUtil.valueOf(location_id),adaptor.getSubscriber().getSubscriberId(),Entity.provider_location));
+                        item.setLocationIds(new BecknStrings());
+                        item.getLocationIds().add(item.getLocationId());
 
-                    Price price = new Price();
-                    item.setPrice(price);
-                    price.setMaximumValue(variant.getMrp());
-                    price.setListedValue(variant.getPrice());
-                    price.setCurrency(store.getCurrency());
-                    price.setValue(variant.getPrice());
-                    price.setOfferedValue(variant.getPrice());
+                        Price price = new Price();
+                        item.setPrice(price);
+                        price.setMaximumValue(variant.getMrp());
+                        price.setListedValue(variant.getPrice());
+                        price.setCurrency(store.getCurrency());
+                        price.setValue(variant.getPrice());
+                        price.setOfferedValue(variant.getPrice());
 
-                    item.setPaymentIds(new BecknStrings());
-                    item.getPaymentIds().add("1"); //Only allow By BAP , ON_ORDER
-                    items.add(item);
+                        item.setPaymentIds(new BecknStrings());
+                        item.getPaymentIds().add(BecknIdHelper.getBecknId("1",adaptor.getSubscriber().getSubscriberId(),Entity.payment)); //Only allow By BAP , ON_ORDER
+
+                        items.add(item);
+
+                    });
 
 
                 }
-
-
             }
-
         }
-        inventoryIds.setLength(inventoryIds.length());
-
-
-        //TODO fill items
-
         return items;
     }
 
@@ -252,6 +295,13 @@ public class ECommerceHelper {
         return quote;
     }
 
+    public boolean isTaxIncludedInPrice(){
+        return getStore().getTaxesIncluded();
+    }
+
+
+    private TypeConverter<Double> doubleTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter();
+    private TypeConverter<Boolean> booleanTypeConverter  = Database.getJdbcTypeHelper("").getTypeRef(boolean.class).getTypeConverter();
 
 
     public Items loadItems(Order order, Items inItems) {
@@ -282,7 +332,7 @@ public class ECommerceHelper {
                     JSONArray taxRates = ECommerceHelper.this.get("/taxes",search_params);
                     if (taxRates.size() > 0 ){
                         JSONObject taxRate = (JSONObject) taxRates.get(0);
-                        return getDoubleTypeConverter().valueOf(taxRate.get("rate"));
+                        return doubleTypeConverter.valueOf(taxRate.get("rate"));
                     }
                 }
                 return 0.0D;
@@ -363,64 +413,6 @@ public class ECommerceHelper {
 
     }
 
-
-    Cache<String,Map<String,JSONObject>> settingGroup = new Cache<String, Map<String, JSONObject>>() {
-        @Override
-        protected Map<String, JSONObject> getValue(String group) {
-            Map<String,JSONObject> settings =  new HashMap<>();
-            JSONArray array = ECommerceHelper.this.get(String.format("/settings/%s/",group), new JSONObject());
-            for (int i = 0; i < array.size(); i++) {
-                JSONObject o = (JSONObject) array.get(i);
-                settings.put((String)o.get("id"), o);
-            }
-            return settings;
-        }
-    };
-
-
-    public boolean isTaxIncludedInPrice(){
-        return getStore().getTaxesIncluded();
-    }
-
-
-    public TypeConverter<Double> getDoubleTypeConverter() {
-        return doubleTypeConverter;
-    }
-
-    private TypeConverter<Double> doubleTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter();
-    private TypeConverter<Boolean> booleanTypeConverter  = Database.getJdbcTypeHelper("").getTypeRef(boolean.class).getTypeConverter();
-
-
-
-
-    public Item createItem(Items items, JSONObject product){
-        Item item  = new Item();
-        item.setId(BecknIdHelper.getBecknId(String.valueOf(product.get("id")),adaptor.getSubscriber().getSubscriberId(),Entity.item));
-        items.add(item);
-        item.setDescriptor(new Descriptor());
-        Descriptor descriptor = item.getDescriptor();
-        descriptor.setName((String)product.get("name"));
-        descriptor.setCode((String)product.get("sku"));
-        descriptor.setShortDesc((String)product.get("short_description"));
-        descriptor.setLongDesc((String)product.get("description"));
-
-
-
-        Price price = new Price();
-        item.setPrice(price);
-        price.setCurrency("INR");
-        price.setValue(Double.parseDouble((String)product.get("price")));
-        price.setListedValue(Double.parseDouble((String)product.get("regular_price")));
-        price.setMaximumValue(price.getListedValue());
-
-        descriptor.setImages(new Images());
-        JSONArray images = (JSONArray) product.get("images");
-        for (int i = 0 ; i< images.size() ;i ++){
-            descriptor.getImages().add((String) ((JSONObject)images.get(i)).get("src"));
-        }
-        return item;
-
-    }
 
     private void createItemFromWooLineItem(Items items, JSONObject wooLineItem) {
         Item item = new Item();
