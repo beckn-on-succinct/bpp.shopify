@@ -134,6 +134,9 @@ public class Products extends BecknObjectsWithId<Product> {
             return get("title");
         }
 
+        public String getProductId(){
+            return StringUtil.valueOf(get("product_id"));
+        }
 
 
     }

@@ -1,43 +1,24 @@
 package in.succinct.bpp.shopify.adaptor;
 
-import com.venky.core.collections.IgnoreCaseMap;
 import com.venky.core.string.StringUtil;
-import com.venky.core.util.ObjectUtil;
 import com.venky.swf.db.Database;
 import com.venky.swf.plugins.beckn.messaging.Subscriber;
-import com.venky.swf.sql.Expression;
-import com.venky.swf.sql.Operator;
-import com.venky.swf.sql.Select;
-import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.Catalog;
-import in.succinct.beckn.Categories;
-import in.succinct.beckn.Category;
-import in.succinct.beckn.Descriptor;
-import in.succinct.beckn.Fulfillment;
-import in.succinct.beckn.Fulfillment.FulfillmentType;
-import in.succinct.beckn.Fulfillments;
-import in.succinct.beckn.Intent;
-import in.succinct.beckn.Item;
-import in.succinct.beckn.Items;
-import in.succinct.beckn.Location;
-import in.succinct.beckn.Locations;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
-import in.succinct.beckn.Payment;
-import in.succinct.beckn.Payments;
-import in.succinct.beckn.Provider;
-import in.succinct.beckn.Providers;
 import in.succinct.beckn.Quote;
 import in.succinct.beckn.Request;
+import in.succinct.beckn.Tracking;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.registry.BecknRegistry;
 import in.succinct.bpp.search.adaptor.SearchAdaptor;
 import in.succinct.bpp.shopify.db.model.BecknOrderMeta;
 import in.succinct.bpp.shopify.helpers.ECommerceHelper;
+import in.succinct.bpp.shopify.helpers.model.DraftOrder;
+import in.succinct.bpp.shopify.helpers.model.Order.Fulfillments;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
-import java.util.List;
 import java.util.Map;
 
 public class ECommerceAdaptor extends CommerceAdaptor {
@@ -73,6 +54,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     @Override
     public void select(Request request, Request response) {
         /* Take select json and fill response with on_select message */
+        Message message = helper.createMessage(response);
+        Order outOrder = helper.createOrder(message);
+        Quote quote = helper.createQuote(outOrder,request.getMessage().getOrder());
 
     }
 
@@ -83,6 +67,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             throw new RuntimeException("No Order passed");
         }
         /* Take init message and fill response with on_init message */
+        Message message = helper.createMessage(reply);
+
+        DraftOrder draftOrder = helper.saveDraftOrder(request);
+        Order outOrder = helper.getBecknOrder(draftOrder);
+
+        message.setOrder(outOrder);
 
     }
 
@@ -93,11 +83,40 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             throw new RuntimeException("No Order passed");
         }
         /* Take confirm message and fill response with on_confirm message */
+        Message message = helper.createMessage(reply);
+
+        in.succinct.bpp.shopify.helpers.model.Order confirmedOrder = helper.confirmDraftOrder(request);
+        Order outOrder = helper.getBecknOrder(confirmedOrder);
+        message.setOrder(outOrder);
+
+
     }
 
     @Override
     public void track(Request request, Request reply) {
         /* Take track message and fill response with on_track message */
+        Order order = request.getMessage().getOrder();
+        if (order == null){
+            throw new RuntimeException("No Order passed");
+        }
+        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
+        meta.setBapOrderId(order.getId());
+        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
+
+        JSONObject params = new JSONObject();
+        params.put("fields","tracking_urls");
+
+        JSONObject fulfillmentJson = helper.get(String.format("/orders/%s/fulfillments.json",meta.getECommerceOrderId()),params);
+        Fulfillments fulfillments = new Fulfillments((JSONArray) fulfillmentJson.get("fulfillments"));
+        String url = fulfillments.get(0).getTrackingUrls().get(0);
+
+        Message message = helper.createMessage(reply);
+        message.setTracking(new Tracking());
+        message.getTracking().setUrl(url);
+
+
+
+
 
     }
 
@@ -108,6 +127,20 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             throw new RuntimeException("No Order passed");
         }
         /* Take cancel message and fill response with on_cancel message */
+        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
+        meta.setBapOrderId(order.getId());
+        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
+
+        JSONObject params = new JSONObject();
+        params.put("reason","customer");
+        JSONObject response = helper.post(String.format("/orders/%s/cancel.json",meta.getECommerceOrderId()),params);
+        in.succinct.bpp.shopify.helpers.model.Order eCommerceOrder = new in.succinct.bpp.shopify.helpers.model.Order((JSONObject) response.get("order"));
+
+        Message message = helper.createMessage(reply);
+        message.setOrder(helper.getBecknOrder(eCommerceOrder));
+
+
+
     }
 
     @Override
@@ -126,8 +159,17 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (order == null){
             throw new RuntimeException("No Order passed");
         }
-        /* Take status message and fill response with on_status message */
+        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
+        meta.setBapOrderId(order.getId());
+        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
 
+        /* Take status message and fill response with on_status message */
+        JSONObject response = helper.get(String.format("/orders/%s.json",meta.getECommerceOrderId()),new JSONObject());
+        in.succinct.bpp.shopify.helpers.model.Order eCommerceOrder = new in.succinct.bpp.shopify.helpers.model.Order((JSONObject) response.get("order"));
+
+        Order becknOrder= helper.getBecknOrder(eCommerceOrder);
+        Message message = helper.createMessage(reply);
+        message.setOrder(becknOrder);
     }
 
     @Override
@@ -138,7 +180,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     @Override
     public void support(Request request, Request reply) {
-        
+        Message message = helper.createMessage(reply);
+        message.setEmail(helper.getStore().getSupportEmail());
+
     }
 
     @Override

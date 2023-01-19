@@ -11,6 +11,18 @@ public interface BecknOrderMeta extends Model {
     public void setBecknTransactionId(String becknTransactionId);
 
 
+
+    @Index
+    @UNIQUE_KEY("edo")
+    public String getECommerceDraftOrderId();
+    public void setECommerceDraftOrderId(String eCommerceOrderId);
+
+
+    @Index
+    @UNIQUE_KEY("bap_order")
+    public String getBapOrderId();
+    public void setBapOrderId(String eCommerceOrderId);
+
     @Index
     @UNIQUE_KEY("eo")
     public String getECommerceOrderId();
