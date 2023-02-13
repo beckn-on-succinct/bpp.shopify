@@ -1,4 +1,4 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import com.venky.geo.GeoCoordinate;
 import org.json.simple.JSONObject;
@@ -81,11 +81,11 @@ public class Store extends ShopifyObjectWithId {
         return get("shop_owner");
     }
 
-    public boolean getTaxesIncluded(){
+    public boolean isTaxesIncluded(){
         return getBoolean("taxes_included");
     }
 
-    public boolean getTaxShipping(){
+    public boolean isTaxShipping(){
         return getBoolean("tax_shipping");
     }
 
@@ -101,8 +101,8 @@ public class Store extends ShopifyObjectWithId {
         return getTimestamp("updated_at");
     }
 
-    public String getPrimaryLocationId(){
-        return get("primary_location_id");
+    public long getPrimaryLocationId(){
+        return getLong("primary_location_id");
     }
 
 

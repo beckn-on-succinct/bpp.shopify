@@ -1,11 +1,10 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
-import com.venky.core.util.ObjectUtil;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjectsWithId;
 
-import in.succinct.bpp.shopify.helpers.model.Products.Product;
+import in.succinct.bpp.shopify.model.Products.Product;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 

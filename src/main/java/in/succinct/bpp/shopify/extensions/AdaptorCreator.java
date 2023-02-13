@@ -5,7 +5,8 @@ import com.venky.extension.Extension;
 import com.venky.extension.Registry;
 import com.venky.swf.plugins.beckn.messaging.Subscriber;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
-import in.succinct.bpp.core.registry.BecknRegistry;
+
+import in.succinct.bpp.core.adaptor.NetworkAdaptor;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 
 import java.util.Map;
@@ -19,10 +20,10 @@ public class AdaptorCreator implements Extension {
     public void invoke(Object... context) {
         Map<String,String> properties = (Map<String,String>) context[0];
         Subscriber subscriber = (Subscriber) context[1];
-        BecknRegistry registry = (BecknRegistry)context[2];
+        //NetworkAdaptor registry = (NetworkAdaptor) context[2];
         ObjectHolder<CommerceAdaptor> commerceAdaptorHolder = (ObjectHolder<CommerceAdaptor>) context[3];
         if (properties.containsKey("in.succinct.bpp.shopify.storeUrl")){
-            commerceAdaptorHolder.set(new ECommerceAdaptor(properties,subscriber,registry));
+            commerceAdaptorHolder.set(new ECommerceAdaptor(properties,subscriber));
         }
     }
 

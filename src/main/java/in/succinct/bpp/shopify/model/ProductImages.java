@@ -1,7 +1,7 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import in.succinct.beckn.BecknObjectsWithId;
-import in.succinct.bpp.shopify.helpers.model.ProductImages.ProductImage;
+import in.succinct.bpp.shopify.model.ProductImages.ProductImage;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 

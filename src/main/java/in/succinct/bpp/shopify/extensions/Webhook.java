@@ -1,28 +1,23 @@
 package in.succinct.bpp.shopify.extensions;
 
-import com.venky.core.security.Crypt;
 import com.venky.core.string.StringUtil;
 import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Extension;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
-import com.venky.swf.routing.Config;
 import in.succinct.beckn.Context;
-import in.succinct.beckn.Order;
 import in.succinct.beckn.Message;
+import in.succinct.beckn.Order;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
+import in.succinct.bpp.core.adaptor.NetworkAdaptor;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
-import org.json.simple.JSONArray;
+import in.succinct.bpp.shopify.model.DraftOrder;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.UUID;
-import java.util.logging.Level;
 
 public class Webhook implements Extension {
     static {
@@ -31,23 +26,24 @@ public class Webhook implements Extension {
     @Override
     public void invoke(Object... objects) {
         CommerceAdaptor adaptor = (CommerceAdaptor) objects[0];
-        Path path = (Path) objects[1];
+        NetworkAdaptor networkAdaptor = (NetworkAdaptor)objects[1];
+        Path path = (Path) objects[2];
         if (!(adaptor instanceof ECommerceAdaptor)) {
             return;
         }
         ECommerceAdaptor eCommerceAdaptor = (ECommerceAdaptor) adaptor;
         try {
-            hook(eCommerceAdaptor, path);
+            hook(eCommerceAdaptor, networkAdaptor,path);
         } catch (Exception ex) {
             throw new RuntimeException(ex);
         }
     }
-    public void hook(ECommerceAdaptor eCommerceAdaptor,Path path) throws Exception{
+    public void hook(ECommerceAdaptor eCommerceAdaptor, NetworkAdaptor networkAdaptor,Path path) throws Exception{
         String payload = StringUtil.read(path.getInputStream());
         //Validate auth headers from path.getHeader
         if (ObjectUtil.equals(path.getHeader("X-WC-Webhook-Topic"),"order.updated")){
             JSONObject eOrder = (JSONObject) JSONValue.parse(payload);
-            Order becknOrder = new Order(); //Fill all attributes here. 
+            Order becknOrder = eCommerceAdaptor.getBecknOrder(new DraftOrder(eOrder)); //Fill all attributes here.
            
 
 
@@ -63,7 +59,7 @@ public class Webhook implements Extension {
             //Fill any other attributes needed.
             //Send unsolicited on_status.
             context.setMessageId(UUID.randomUUID().toString());
-            eCommerceAdaptor.callback(request);
+            networkAdaptor.getApiAdaptor().callback(eCommerceAdaptor,request);
 
         }
     }

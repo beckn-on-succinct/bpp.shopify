@@ -1,4 +1,4 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;

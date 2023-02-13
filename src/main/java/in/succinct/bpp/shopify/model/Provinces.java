@@ -1,9 +1,8 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
-import in.succinct.beckn.BecknObjectWithId;
 import in.succinct.beckn.BecknObjectsWithId;
-import in.succinct.bpp.shopify.helpers.model.Provinces.Province;
+import in.succinct.bpp.shopify.model.Provinces.Province;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 

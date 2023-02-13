@@ -1,4 +1,4 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
 import in.succinct.beckn.BecknObjectWithId;

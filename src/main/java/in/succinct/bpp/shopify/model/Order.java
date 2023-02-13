@@ -1,6 +1,5 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
-import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
 import org.json.simple.JSONArray;

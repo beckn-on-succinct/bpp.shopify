@@ -1,10 +1,9 @@
-package in.succinct.bpp.shopify.helpers.model;
+package in.succinct.bpp.shopify.model;
 
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.Tag;
-import in.succinct.beckn.Tags;
 import org.json.simple.JSONObject;
 
 import java.util.Date;
