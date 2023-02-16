@@ -1,13 +1,17 @@
 package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
+import com.venky.swf.db.Database;
+import com.venky.swf.db.JdbcTypeHelper;
 import in.succinct.beckn.BecknObject;
+import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
 
 import in.succinct.bpp.shopify.model.Products.Product;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
+import java.sql.JDBCType;
 import java.util.Date;
 import java.util.Objects;
 
@@ -64,13 +68,71 @@ public class Products extends BecknObjectsWithId<Product> {
             return get("title");
         }
 
-        public ProductVariants getProductVariants(){
-            return get(ProductVariants.class, "product_variants");
+        public Metafields getMetafields(){
+            return get(Metafields.class, "metafields");
         }
 
 
 
+        public ProductVariants getProductVariants(){
+            return get(ProductVariants.class, "product_variants");
+        }
 
+        public boolean isVeg(){
+            Boolean value = get("veg");
+            if (value == null){
+                for (Metafield f: getMetafields()){
+                    if (f.getNamespace().equals("ondc.tags")){
+
+                        if (f.getKey().equals("veg")){
+                            value = Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(f.getValue());
+                            set(f.getKey(),value);
+                        }
+                    }
+                }
+            }
+            return value;
+        }
+
+
+
+    }
+    public static class Metafield extends BecknObject{
+        public Metafield() {
+        }
+
+        public Metafield(JSONObject object) {
+            super(object);
+        }
+
+        public String getNamespace(){
+            return get("namespace");
+        }
+        public void setNamespace(String namespace){
+            set("namespace",namespace);
+        }
+        public String getKey(){
+            return get("key");
+        }
+        public void setKey(String key){
+            set("key",key);
+        }
+        public String getValue(){
+            return get("value");
+        }
+        public void setValue(String value){
+            set("value",value);
+        }
+
+    }
+    public static class Metafields extends BecknObjects<Metafield> {
+
+        public Metafields() {
+        }
+
+        public Metafields(JSONArray value) {
+            super(value);
+        }
     }
 
     public static class ProductVariants extends BecknObjectsWithId<ProductVariant>{
