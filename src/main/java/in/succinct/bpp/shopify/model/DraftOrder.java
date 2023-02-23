@@ -1,5 +1,6 @@
 package in.succinct.bpp.shopify.model;
 
+import com.venky.core.string.StringUtil;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
@@ -175,17 +176,21 @@ public class DraftOrder extends ShopifyObjectWithId {
     public static class  NoteAttributes extends BecknObjects<Tag> {
 
     }
-    public static class LineItem extends ShopifyObjectWithId{
-        public String getVariantId(){
+    public static class LineItem extends BecknObject{
+        public String getId(){
+            return StringUtil.valueOf(get("id"));
+        }
+
+        public long getVariantId(){
             return get("variant_id");
         }
-        public void setVariantId(String variant_id){
+        public void setVariantId(long variant_id){
             set("variant_id",variant_id);
         }
-        public String getProductId(){
+        public long getProductId(){
             return get("product_id");
         }
-        public void setProductId(String product_id){
+        public void setProductId(long product_id){
             set("product_id",product_id);
         }
         public String getName(){
@@ -208,10 +213,10 @@ public class DraftOrder extends ShopifyObjectWithId {
             set("vendor",vendor);
         }
 
-        public double getQuantity(){
-            return getDouble("quantity");
+        public int getQuantity(){
+            return getInteger("quantity");
         }
-        public void setQuantity(double quantity){
+        public void setQuantity(int quantity){
             set("quantity",quantity);
         }
         public boolean getGiftCard(){
@@ -403,9 +408,10 @@ public class DraftOrder extends ShopifyObjectWithId {
     public static class TaxLines extends BecknObjectsWithId<TaxLine>{
 
     }
-    public static class LineItems extends BecknObjectsWithId<LineItem>{
+    public static class LineItems extends BecknObjects<LineItem>{
 
     }
+
     public static class Address extends BecknObject{
         public String getAddress1(){
             return get("address1");

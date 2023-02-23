@@ -13,6 +13,7 @@ import org.json.simple.JSONAware;
 import org.json.simple.JSONObject;
 
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +39,15 @@ public class ECommerceSDK {
         return adaptor.getConfiguration().get(String.format("%s.storeUrl",getConfigPrefix()));
     }
     public String getAdminApiUrl(){
-        return String.format("/admin/api/%s", new SimpleDateFormat("YYYY-MM").format(new Date()));
+        Date now = new Date();
+        Calendar calendar = Calendar.getInstance();
+        calendar.setTime(now);
+        int month = calendar.get(Calendar.MONTH) ;
+        int m = (month/3) * 3 + 1 ;
+        int y = calendar.get(Calendar.YEAR);
+
+
+        return String.format("%s/admin/api/%d-%02d", getStoreUrl(), y,m);
     }
     public String getAccessToken(){
         return adaptor.getConfiguration().get(String.format("%s.accessToken",getConfigPrefix()));
@@ -95,7 +104,7 @@ public class ECommerceSDK {
         Page<T> page = new Page<>();
         page.data = call.getResponseAsJson();
         List<String> links = call.getResponseHeaders().get("Link");
-        if (!links.isEmpty()){
+        if (links != null && !links.isEmpty()){
             String link = links.get(0);
             Matcher matcher = Pattern.compile("(<)(https://[^\\?]*\\?page_info=[^&]*&limit=[0-9]*)(>; rel=)(previous|next)([ ,])*").matcher(link);
             matcher.results().forEach(mr->{

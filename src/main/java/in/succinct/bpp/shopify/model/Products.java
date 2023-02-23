@@ -13,7 +13,10 @@ import org.json.simple.JSONObject;
 
 import java.sql.JDBCType;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import java.util.StringTokenizer;
 
 public class Products extends BecknObjectsWithId<Product> {
 
@@ -75,21 +78,29 @@ public class Products extends BecknObjectsWithId<Product> {
 
 
         public ProductVariants getProductVariants(){
-            return get(ProductVariants.class, "product_variants");
+            return get(ProductVariants.class, "variants");
+        }
+
+        Set<String> tagSet = null;
+        private void loadTagSet(){
+            if (tagSet == null){
+                tagSet = new HashSet<>();
+                String tags = getTags();
+                if (tags != null){
+                    StringTokenizer tokenizer = new StringTokenizer(getTags()," ,");
+                    while (tokenizer.hasMoreTokens()){
+                       tagSet.add(tokenizer.nextToken());
+                    }
+                }
+            }
         }
 
         public boolean isVeg(){
             Boolean value = get("veg");
             if (value == null){
-                for (Metafield f: getMetafields()){
-                    if (f.getNamespace().equals("ondc.tags")){
-
-                        if (f.getKey().equals("veg")){
-                            value = Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(f.getValue());
-                            set(f.getKey(),value);
-                        }
-                    }
-                }
+                loadTagSet();
+                value = tagSet.contains("veg");
+                set("veg",value);
             }
             return value;
         }
@@ -249,7 +260,7 @@ public class Products extends BecknObjectsWithId<Product> {
             return get("sku");
         }
 
-        public boolean getTracked(){
+        public boolean isTracked(){
             return getBoolean("tracked");
         }
 
@@ -259,7 +270,7 @@ public class Products extends BecknObjectsWithId<Product> {
         
         
     }
-    public static class InventoryLevels extends BecknObjectsWithId<InventoryLevel> {
+    public static class InventoryLevels extends BecknObjects<InventoryLevel> {
 
         public InventoryLevels() {
         }
@@ -268,7 +279,7 @@ public class Products extends BecknObjectsWithId<Product> {
             super(array);
         }
     }
-    public static class InventoryLevel extends ShopifyObjectWithId {
+    public static class InventoryLevel extends BecknObject{
         public InventoryLevel(){
             super();
         }
