@@ -18,7 +18,7 @@ public class DraftOrder extends ShopifyObjectWithId {
     }
 
     public String getOrderId(){
-        return get("order_id");
+        return StringUtil.valueOf(get("order_id"));
     }
     
     public String getName(){

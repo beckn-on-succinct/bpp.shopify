@@ -87,9 +87,9 @@ public class Products extends BecknObjectsWithId<Product> {
                 tagSet = new HashSet<>();
                 String tags = getTags();
                 if (tags != null){
-                    StringTokenizer tokenizer = new StringTokenizer(getTags()," ,");
+                    StringTokenizer tokenizer = new StringTokenizer(getTags(),",");
                     while (tokenizer.hasMoreTokens()){
-                       tagSet.add(tokenizer.nextToken());
+                       tagSet.add(tokenizer.nextToken().trim());
                     }
                 }
             }
@@ -172,6 +172,15 @@ public class Products extends BecknObjectsWithId<Product> {
         public int getGrams(){
             return getInteger("grams");
         }
+        
+        public double getWeight(){
+            return getDouble("weight");
+        }
+
+        public String getWeightUnit(){
+            return get("weight_unit");
+        }
+
         
         public long getImageId(){
             return getLong("image_id");

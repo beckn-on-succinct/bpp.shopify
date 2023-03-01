@@ -76,7 +76,7 @@ public class ECommerceSDK {
         }});
     }
     public <T extends JSONAware> T delete(String relativeUrl, JSONObject parameter ){
-        return get(relativeUrl,parameter,new IgnoreCaseMap<>(){{
+        return post(relativeUrl,parameter,new IgnoreCaseMap<>(){{
             put("X-HTTP-Method-Override","DELETE");
         }});
     }
