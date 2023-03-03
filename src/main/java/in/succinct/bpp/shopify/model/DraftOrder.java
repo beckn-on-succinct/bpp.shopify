@@ -1,13 +1,23 @@
 package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
+import com.venky.swf.plugins.collab.db.model.config.City;
+import com.venky.swf.plugins.collab.db.model.config.Country;
+import com.venky.swf.plugins.collab.db.model.config.State;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
+import in.succinct.beckn.BecknStrings;
+import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Tag;
+import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
 
 public class DraftOrder extends ShopifyObjectWithId {
     public DraftOrder(){
@@ -63,12 +73,7 @@ public class DraftOrder extends ShopifyObjectWithId {
     public void setEmail(String email){
         set("email",email);
     }
-    public String getStatus(){
-        return get("status");
-    }
-    public void setStatus(String status){
-        set("status",status);
-    }
+
     public String getCurrency(){
         return get("currency");
     }
@@ -151,6 +156,17 @@ public class DraftOrder extends ShopifyObjectWithId {
     public void setShippingLine(ShippingLine shipping_line){
         set("shipping_line",shipping_line);
     }
+
+    static Map<String, Status> fulfillmentStatusMap = new HashMap<>() {{
+        put("fulfilled",Status.Completed);
+        put("restocked",Status.Cancelled);
+    }};
+
+    public Status getStatus(){
+        String s =  get("fulfillment_status");
+        return s == null ? null : fulfillmentStatusMap.get(s);
+    }
+
 
     public static class ShippingLine extends BecknObject{
         public boolean getCustom(){
@@ -502,5 +518,67 @@ public class DraftOrder extends ShopifyObjectWithId {
             set("zip",zip);
         }
 
+        public in.succinct.beckn.Address getAddress (){
+            in.succinct.beckn.Address address = new in.succinct.beckn.Address();
+            address.setName(getFirstName() + " " + getLastName());
+            {
+                String[] parts = getAddress1().split(",");
+                if (parts.length > 0) address.setDoor(parts[0]);
+                if (parts.length > 1) {
+                    StringBuilder remaining = new StringBuilder();
+                    for (String part : parts) {
+                        remaining.append(remaining.length() > 0 ? "," : "" );
+                        remaining.append(part);
+                    }
+                    address.setBuilding(remaining.toString());
+                }
+            }
+            {
+                String[] parts = getAddress2().split(",");
+                if (parts.length > 0) address.setStreet(parts[0]);
+                if (parts.length > 1) {
+                    StringBuilder remaining = new StringBuilder();
+                    for (String part : parts) {
+                        remaining.append(remaining.length() > 0 ? "," : "" );
+                        remaining.append(part);
+                    }
+                    address.setLocality(remaining.toString());
+                }
+            }
+
+            address.setPinCode(getZip());
+            Country country= Country.findByISO(getCountryCode());
+            State state = State.findByCountryAndName(country.getId(),getProvince());
+            City city = City.findByStateAndName(state.getId(),getCity());
+
+            address.setCountry(country.getName());
+            address.setState(state.getName());
+            address.setCity(city.getName());
+            return address;
+        }
     }
+
+    public static class Fulfillment extends ShopifyObjectWithId{
+
+        public Fulfillment(JSONObject fulfillment){
+            super(fulfillment);
+        }
+        public BecknStrings getTrackingUrls(){
+            return get(BecknStrings.class, "tracking_urls");
+        }
+
+    }
+    public static class Fulfillments extends BecknObjectsWithId<Fulfillment> {
+        public Fulfillments(){
+            super();
+        }
+        public Fulfillments(JSONArray array){
+            super(array);
+        }
+    }
+
+    public Fulfillments getFulfillments(){
+        return get(Fulfillments.class, "fulfillments");
+    }
+
 }

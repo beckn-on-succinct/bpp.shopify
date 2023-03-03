@@ -2,8 +2,15 @@ package in.succinct.bpp.shopify.model;
 
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
+import in.succinct.beckn.Fulfillment.FulfillmentStatus;
+import in.succinct.beckn.Order.Status;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
+
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
 
 public class Order extends DraftOrder{
     public Order(){
@@ -13,23 +20,7 @@ public class Order extends DraftOrder{
         super(eCommerceOrder);
     }
 
-    public static class Fulfillment extends ShopifyObjectWithId{
 
-        public Fulfillment(JSONObject fulfillment){
-            super(fulfillment);
-        }
-        public BecknStrings getTrackingUrls(){
-            return get(BecknStrings.class, "tracking_urls");
-        }
-        
-    }
-    public static class Fulfillments extends BecknObjectsWithId<Fulfillment> {
-        public Fulfillments(){
-            super();
-        }
-        public Fulfillments(JSONArray array){
-            super(array);
-        }
-    }
+
 
 }
