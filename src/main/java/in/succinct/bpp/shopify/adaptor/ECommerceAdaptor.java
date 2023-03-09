@@ -793,7 +793,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     public Order getBecknOrder(DraftOrder eCommerceOrder,BecknOrderMeta meta) {
 
         Order lastReturnedOrderJson = new Order(meta.getOrderJson());
-
+        String fulfillmentId = "fulfillment/"+ FulfillmentType.home_delivery+"/"+meta.getBecknTransactionId();
         Order order = new Order();
         order.setPayment(new Payment());
         if (lastReturnedOrderJson.getPayment() != null) {
@@ -853,10 +853,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
          */
         BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.tax,"Tax",tax);
+        element.setItemId(fulfillmentId);
         quote.getBreakUp().add(element);
 
         if (shippingPrice.getValue() > 0) {
             element = quote.getBreakUp().createElement(BreakUpCategory.delivery, "Delivery Charges", shippingPrice);
+            element.setItemId(fulfillmentId);
             quote.getBreakUp().add(element);
         }
 
@@ -908,7 +910,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         Fulfillment fulfillment = new Fulfillment();
         order.setFulfillment(fulfillment);
-        fulfillment.setId("fulfillment/"+ FulfillmentType.home_delivery+"/"+meta.getBecknTransactionId());
+        fulfillment.setId(fulfillmentId);
         fulfillment.setStart(new FulfillmentStop());
         fulfillment.getStart().setLocation(providerLocation);
         fulfillment.setProviderId(String.format("%s/logistics",getSubscriber().getSubscriberId()));
