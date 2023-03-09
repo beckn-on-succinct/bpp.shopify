@@ -11,7 +11,9 @@ import com.venky.swf.integration.api.HttpMethod;
 import com.venky.swf.integration.api.InputFormat;
 import org.json.simple.JSONAware;
 import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 
+import java.io.InputStreamReader;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
@@ -81,16 +83,26 @@ public class ECommerceSDK {
         }});
     }
     public <T extends JSONAware> T post(String relativeUrl, JSONObject parameter , Map<String,String> addnlHeaders){
-        return new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).headers(addnlHeaders)
-                .inputFormat(InputFormat.JSON).input(parameter).method(HttpMethod.POST).getResponseAsJson();
+        Call<JSONObject> call =  new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).headers(addnlHeaders)
+                .inputFormat(InputFormat.JSON).input(parameter).method(HttpMethod.POST);
+        T object = call.getResponseAsJson();
+        if (call.hasErrors()){
+            object = (T)JSONValue.parse(new InputStreamReader(call.getErrorStream()));
+        }
+        return object;
     }
     public <T extends JSONAware> T get(String relativeUrl, JSONObject parameter){
         return get(relativeUrl,parameter,new IgnoreCaseMap<>());
     }
     public <T extends JSONAware> T get(String relativeUrl, JSONObject parameter, Map<String,String> addnlHeaders){
-        return new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).headers(addnlHeaders)
+        Call<JSONObject> call = new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).headers(addnlHeaders)
                 .input(parameter)
-                .method(HttpMethod.GET).getResponseAsJson();
+                .method(HttpMethod.GET);
+        T o = call.getResponseAsJson();
+        if (o == null && call.hasErrors()){
+            o = (T)JSONValue.parse(new InputStreamReader(call.getErrorStream()));
+        }
+        return o;
     }
 
     public <T extends JSONAware> Page<T> getPage(String relativeUrl, JSONObject parameter){

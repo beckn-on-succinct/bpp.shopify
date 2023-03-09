@@ -129,7 +129,7 @@ public class Products extends BecknObjectsWithId<Product> {
             set("key",key);
         }
         public String getValue(){
-            return get("value");
+            return StringUtil.valueOf(get("value"));
         }
         public void setValue(String value){
             set("value",value);

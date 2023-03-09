@@ -87,7 +87,29 @@ public class DraftOrder extends ShopifyObjectWithId {
     public void setSource(String source){
         set("source",source);
     }
-    
+
+    public Date getCreatedAt(){
+        return getTimestamp("created_at");
+    }
+    public void setCreatedAt(Date created_at){
+        set("created_at",created_at,TIMESTAMP_FORMAT);
+    }
+
+    public Date getCancelledAt(){
+        return getTimestamp("cancelled_at");
+    }
+    public void setCancelledAt(Date cancelled_at){
+        set("cancelled_at",cancelled_at,TIMESTAMP_FORMAT);
+    }
+
+    public Date getUpdatedAt(){
+        return getTimestamp("updated_at");
+    }
+    public void setUpdatedAt(Date updated_at){
+        set("updated_at",updated_at,TIMESTAMP_FORMAT);
+    }
+
+
     public Date getInvoiceSentAt(){
         return getTimestamp("invoice_sent_at");
     }
@@ -160,11 +182,25 @@ public class DraftOrder extends ShopifyObjectWithId {
     static Map<String, Status> fulfillmentStatusMap = new HashMap<>() {{
         put("fulfilled",Status.Completed);
         put("restocked",Status.Cancelled);
+        put("ready_for_pickup",Status.Packed);
+        put("delivered",Status.Completed);
+        put("in_transit",Status.Out_for_delivery);
+        put("out_for_delivery",Status.Out_for_delivery);
+        put("failure",Status.Out_for_delivery);
+
     }};
 
     public Status getStatus(){
         String s =  get("fulfillment_status");
-        return s == null ? null : fulfillmentStatusMap.get(s);
+        Status status = fulfillmentStatusMap.get(s);
+        if (status == null){
+            if (getFulfillments().size() > 0){
+                Fulfillment  fulfillment = getFulfillments().get(0);
+                String shipmentStatus = fulfillment.getShipmentStatus();
+                return fulfillmentStatusMap.get(shipmentStatus);
+            }
+        }
+        return null;
     }
 
 
@@ -521,7 +557,7 @@ public class DraftOrder extends ShopifyObjectWithId {
         public in.succinct.beckn.Address getAddress (){
             in.succinct.beckn.Address address = new in.succinct.beckn.Address();
             address.setName(getFirstName() + " " + getLastName());
-            {
+            if (getAddress1() != null){
                 String[] parts = getAddress1().split(",");
                 if (parts.length > 0) address.setDoor(parts[0]);
                 if (parts.length > 1) {
@@ -533,7 +569,7 @@ public class DraftOrder extends ShopifyObjectWithId {
                     address.setBuilding(remaining.toString());
                 }
             }
-            {
+            if (getAddress2() != null){
                 String[] parts = getAddress2().split(",");
                 if (parts.length > 0) address.setStreet(parts[0]);
                 if (parts.length > 1) {
@@ -548,7 +584,14 @@ public class DraftOrder extends ShopifyObjectWithId {
 
             address.setPinCode(getZip());
             Country country= Country.findByISO(getCountryCode());
-            State state = State.findByCountryAndName(country.getId(),getProvince());
+
+            State state =  null ;
+            if (getProvince() != null) {
+                state = State.findByCountryAndName(country.getId(),getProvince());
+            }else if (getProvinceCode() != null){
+                state = State.findByCountryAndName(country.getId(),getProvinceCode());
+            }
+
             City city = City.findByStateAndName(state.getId(),getCity());
 
             address.setCountry(country.getName());
@@ -559,13 +602,31 @@ public class DraftOrder extends ShopifyObjectWithId {
     }
 
     public static class Fulfillment extends ShopifyObjectWithId{
-
+        public Fulfillment(){
+            super();
+        }
         public Fulfillment(JSONObject fulfillment){
             super(fulfillment);
         }
         public BecknStrings getTrackingUrls(){
             return get(BecknStrings.class, "tracking_urls");
         }
+
+        public String getStatus(){
+            return get("status");
+        }
+        public void setStatus(String status){
+            set("status",status);
+        }
+
+        public String getShipmentStatus(){
+            return get("shipment_status");
+        }
+        public void setShipmentStatus(String shipment_status){
+            set("shipment_status",shipment_status);
+        }
+
+
 
     }
     public static class Fulfillments extends BecknObjectsWithId<Fulfillment> {

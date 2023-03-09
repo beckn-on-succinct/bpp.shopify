@@ -8,7 +8,6 @@ import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
 import com.venky.geo.GeoCoordinate;
 import com.venky.swf.db.Database;
-import com.venky.swf.db.JdbcTypeHelper;
 import com.venky.swf.db.JdbcTypeHelper.TypeConverter;
 import com.venky.swf.plugins.beckn.messaging.Subscriber;
 import com.venky.swf.plugins.collab.db.model.config.City;
@@ -27,6 +26,8 @@ import in.succinct.beckn.BreakUp.BreakUpElement;
 import in.succinct.beckn.BreakUp.BreakUpElement.BreakUpCategory;
 import in.succinct.beckn.Contact;
 import in.succinct.beckn.Descriptor;
+import in.succinct.beckn.Document;
+import in.succinct.beckn.Documents;
 import in.succinct.beckn.Fulfillment;
 import in.succinct.beckn.Fulfillment.FulfillmentType;
 import in.succinct.beckn.FulfillmentStop;
@@ -172,15 +173,27 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         lastKnown.setBilling(bo.getBilling());
         lastKnown.setPayment(bo.getPayment());
         orderMeta.setOrderJson(lastKnown.getInner().toString()); //.getInner() needed to avoid getting the initialized string payload back.
-
-
-        setBilling( bo.getBilling(),draftOrder);
+        if (bo.getPayment() != null && bo.getPayment().getBuyerAppFinderFeeType() != null){
+            orderMeta.setBuyerAppFinderFeeType(bo.getPayment().getBuyerAppFinderFeeType().toString());
+            orderMeta.setBuyerAppFinderFeeAmount(doubleTypeConverter.valueOf(bo.getPayment().getBuyerAppFinderFeeAmount()));
+        }
         setShipping( bo.getFulfillment(), draftOrder);
 
-        ShippingLine shippingLine = new ShippingLine();
-        shippingLine.setTitle("Standard");
-        shippingLine.setPrice(serviceability.getCharges());
-        draftOrder.setShippingLine(shippingLine);
+        if (bo.getBilling() == null){
+            bo.setBilling(new Billing());
+        }
+        if (bo.getBilling().getAddress() == null){
+            bo.getBilling().setAddress(bo.getFulfillment().getEnd().getLocation().getAddress());
+        }
+
+        setBilling( bo.getBilling(),draftOrder);
+
+        if (serviceability != null) {
+            ShippingLine shippingLine = new ShippingLine();
+            shippingLine.setTitle("Standard");
+            shippingLine.setPrice(serviceability.getCharges());
+            draftOrder.setShippingLine(shippingLine);
+        }
 
 
         if (bo.getItems() != null) {
@@ -301,7 +314,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         Contact contact = source.getEnd().getContact();
         GeoCoordinate gps = source.getEnd().getLocation().getGps();
         if (address.getCountry() == null){
-            address.setCountry(getProviderConfig().getLocation().getCountry().getName());
+            address.setCountry(getProviderConfig().getLocation().getAddress().getCountry());
         }
         Country country = Country.findByName(address.getCountry());
         State state = State.findByCountryAndName(country.getId(), address.getState());
@@ -376,8 +389,14 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         JSONObject fulfillmentJson = helper.get(String.format("/orders/%s/fulfillments.json", meta.getECommerceOrderId()), params);
         Fulfillments fulfillments = new Fulfillments((JSONArray) fulfillmentJson.get("fulfillments"));
-        String url = fulfillments.get(0).getTrackingUrls().get(0);
-
+        String url = null;
+        if (fulfillments.size() > 0 ) {
+            DraftOrder.Fulfillment fulfillment = fulfillments.get(0);
+            BecknStrings urls = fulfillment.getTrackingUrls();
+            if (urls.size() >0 ){
+                url = urls.get(0);
+            }
+        }
         return url;
     }
 
@@ -392,6 +411,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
 
         JSONObject response = helper.post(String.format("/orders/%s/cancel.json", meta.getECommerceOrderId()), params);
+        String error = (String)response.get("error");
+        if (!ObjectUtil.isVoid(error)) {
+            throw new RuntimeException(error);
+        }
         in.succinct.bpp.shopify.model.Order eCommerceOrder = new in.succinct.bpp.shopify.model.Order((JSONObject) response.get("order"));
         Order outOrder = getBecknOrder(eCommerceOrder);
         return outOrder;
@@ -782,9 +805,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             setPayment(order.getPayment(),eCommerceOrder);
             order.getPayment().getParams().setTransactionId(meta.getBecknTransactionId());
         //}
-        if (lastReturnedOrderJson.getPayment() != null) {
+        if (lastReturnedOrderJson.getPayment() != null && lastReturnedOrderJson.getPayment().getBuyerAppFinderFeeAmount() != null ) {
             order.getPayment().setBuyerAppFinderFeeAmount(lastReturnedOrderJson.getPayment().getBuyerAppFinderFeeAmount());
             order.getPayment().setBuyerAppFinderFeeType(lastReturnedOrderJson.getPayment().getBuyerAppFinderFeeType());
+        }else {
+            order.getPayment().setBuyerAppFinderFeeAmount(meta.getBuyerAppFinderFeeAmount());
+            order.getPayment().setBuyerAppFinderFeeType(CommissionType.valueOf(meta.getBuyerAppFinderFeeType()));
         }
         Double feeAmount = order.getPayment().getBuyerAppFinderFeeAmount();
         if (feeAmount != null) {
@@ -846,7 +872,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         //order.setId(meta.getBapOrderId());
         Status orderStatus = eCommerceOrder.getStatus();
         if (orderStatus == null && eCommerceOrder instanceof in.succinct.bpp.shopify.model.Order){
-            orderStatus = Status.Accepted;
+            if (eCommerceOrder.getCancelledAt() != null){
+                orderStatus = Status.Cancelled;
+            }else if (eCommerceOrder.getCompletedAt() != null){
+                orderStatus = Status.Completed;
+            }else {
+                orderStatus = Status.Accepted;
+            }
         }
         order.setState(orderStatus);
         order.setItems(new Items());
@@ -883,7 +915,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         fulfillment.setType(FulfillmentType.home_delivery);
 
 
-        fulfillment.setFulfillmentStatus(orderStatus);
+        fulfillment.setFulfillmentStatus(Fulfillment.getFulfillmentStatus(orderStatus));
         fulfillment.setEnd(new FulfillmentStop());
         if (lastReturnedOrderJson.getFulfillment().getEnd() != null) {
             fulfillment.getEnd().update(lastReturnedOrderJson.getFulfillment().getEnd());
@@ -915,6 +947,16 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (!ObjectUtil.isVoid(meta.getBapOrderId())) {
             order.setId(meta.getBapOrderId());
         }
+        order.setCreatedAt(eCommerceOrder.getCreatedAt());
+        order.setUpdatedAt(eCommerceOrder.getUpdatedAt());
+        /*
+        order.setDocuments( new Documents());
+        Document invoice = new Document();
+        order.getDocuments().add(invoice);
+        invoice.setLabel("invoice");
+        invoice.setUrl(""); // Shopify doesnot give any url right now , Even Data url seems to be iffy
+
+         */
 
         meta.setOrderJson(order.toString());
         meta.save();
@@ -1046,7 +1088,11 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         if (source.getCountryCode() == null){
             in.succinct.beckn.Country country = getProviderConfig().getLocation().getCountry();
-            source.setCountryCode(country.getCode()); //Same Country.
+            if (country != null) {
+                source.setCountryCode(country.getCode()); //Same Country.
+            }else {
+                source.setCountryCode(getProviderConfig().getLocation().getAddress().getCountry());
+            }
         }
 
         Address address = source.getAddress();
