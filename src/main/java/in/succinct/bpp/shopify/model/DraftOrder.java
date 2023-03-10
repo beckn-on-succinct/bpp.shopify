@@ -194,7 +194,7 @@ public class DraftOrder extends ShopifyObjectWithId {
         String s =  get("fulfillment_status");
         Status status = fulfillmentStatusMap.get(s);
         if (status == null){
-            if (getFulfillments().size() > 0){
+            if (getFulfillments() != null && getFulfillments().size() > 0){
                 Fulfillment  fulfillment = getFulfillments().get(0);
                 String shipmentStatus = fulfillment.getShipmentStatus();
                 return fulfillmentStatusMap.get(shipmentStatus);
