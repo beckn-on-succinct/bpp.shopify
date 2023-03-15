@@ -913,7 +913,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         fulfillment.setId(fulfillmentId);
         fulfillment.setStart(new FulfillmentStop());
         fulfillment.getStart().setLocation(providerLocation);
-        fulfillment.setProviderId(String.format("%s/logistics",getSubscriber().getSubscriberId()));
+        fulfillment.setProviderId(String.format("%s/logistics",getSubscriber().getAppId()));
         fulfillment.setType(FulfillmentType.home_delivery);
 
 
@@ -944,7 +944,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         order.getFulfillments().add(fulfillment);
 
         order.setProvider(new Provider());
-        order.getProvider().setId(getSubscriber().getSubscriberId());
+        order.getProvider().setId(getSubscriber().getAppId());
 
         if (!ObjectUtil.isVoid(meta.getBapOrderId())) {
             order.setId(meta.getBapOrderId());
