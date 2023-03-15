@@ -9,7 +9,6 @@ import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.KeyFactorySpi.EC;
 
 import java.util.HashMap;
 import java.util.Map;
