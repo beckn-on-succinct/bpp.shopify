@@ -363,7 +363,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         orderMeta.setECommerceOrderId(draftOrder.getOrderId());
         if (ObjectUtil.isVoid(orderMeta.getBapOrderId())) {
-            orderMeta.setBapOrderId(BecknIdHelper.getBecknId(orderMeta.getECommerceOrderId(), getSubscriber().getSubscriberId(), Entity.order));
+            orderMeta.setBapOrderId(BecknIdHelper.getBecknId(orderMeta.getECommerceOrderId(), getSubscriber(), Entity.order));
         }
         orderMeta.save();
 
@@ -457,7 +457,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                     return;
                 }
                 Location location = new Location();
-                location.setId(BecknIdHelper.getBecknId(StringUtil.valueOf(store.get("id")), getSubscriber().getSubscriberId(), Entity.provider_location));
+                location.setId(BecknIdHelper.getBecknId(StringUtil.valueOf(store.get("id")), getSubscriber(), Entity.provider_location));
                 location.setAddress(new Address());
                 location.getAddress().setName((String) store.get("name"));
                 location.getAddress().setStreet((String)store.get("address1"));
@@ -521,7 +521,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
                     inventoryLocations.get(variant.getInventoryItemId()).forEach(location_id -> {
                         Item item = new Item();
-                        item.setId(BecknIdHelper.getBecknId(variant.getId(), getSubscriber().getSubscriberId(), Entity.item));
+                        item.setId(BecknIdHelper.getBecknId(variant.getId(), getSubscriber(), Entity.item));
 
                         Descriptor descriptor = new Descriptor();
                         item.setDescriptor(descriptor);
@@ -576,7 +576,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
 
 
-                        item.setLocationId(BecknIdHelper.getBecknId(StringUtil.valueOf(location_id), getSubscriber().getSubscriberId(), Entity.provider_location));
+                        item.setLocationId(BecknIdHelper.getBecknId(StringUtil.valueOf(location_id), getSubscriber(), Entity.provider_location));
                         item.setLocationIds(new BecknStrings());
                         item.getLocationIds().add(item.getLocationId());
 
@@ -970,7 +970,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     private Item createItemFromECommerceLineItem(LineItem eCommerceLineItem) {
         Item item = new Item();
         item.setDescriptor(new Descriptor());
-        item.setId(BecknIdHelper.getBecknId(String.valueOf(eCommerceLineItem.getVariantId()), getSubscriber().getSubscriberId(), Entity.item));
+        item.setId(BecknIdHelper.getBecknId(String.valueOf(eCommerceLineItem.getVariantId()), getSubscriber(), Entity.item));
         item.getDescriptor().setName(eCommerceLineItem.getName());
         item.getDescriptor().setCode(eCommerceLineItem.getSku());
         if (ObjectUtil.isVoid(item.getDescriptor().getCode())){
