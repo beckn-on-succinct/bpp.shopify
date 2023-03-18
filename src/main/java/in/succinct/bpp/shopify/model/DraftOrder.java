@@ -200,7 +200,7 @@ public class DraftOrder extends ShopifyObjectWithId {
                 return fulfillmentStatusMap.get(shipmentStatus);
             }
         }
-        return null;
+        return status;
     }
 
 
