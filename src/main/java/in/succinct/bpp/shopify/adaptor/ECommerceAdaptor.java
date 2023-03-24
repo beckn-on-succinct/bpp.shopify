@@ -963,10 +963,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         order.setCreatedAt(eCommerceOrder.getCreatedAt());
         order.setUpdatedAt(eCommerceOrder.getUpdatedAt());
 
-
-
-
-
+        meta.save();
 
         return order;
     }

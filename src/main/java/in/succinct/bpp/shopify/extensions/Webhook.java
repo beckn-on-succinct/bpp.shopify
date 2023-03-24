@@ -12,6 +12,7 @@ import in.succinct.beckn.Order;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
+import in.succinct.bpp.core.db.model.BecknOrderMeta;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
@@ -59,7 +60,17 @@ public class Webhook implements Extension {
 
             JSONObject eOrder = (JSONObject) JSONValue.parse(payload);
             in.succinct.bpp.shopify.model.Order shopifyOrder = new in.succinct.bpp.shopify.model.Order(eOrder);
+            BecknOrderMeta meta = eCommerceAdaptor.getOrderMeta(eCommerceAdaptor.getBecknTransactionId(shopifyOrder));
+            if (ObjectUtil.isVoid(meta.getNetworkId())){
+                meta.setNetworkId(networkAdaptor.getId());
+                meta.save();
+            }
+            if (!ObjectUtil.equals(meta.getNetworkId(),networkAdaptor.getId())){
+                return;
+            }
+
             Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); //Fill all attributes here.
+
 
             final Request request = new Request();
             request.setMessage(new Message());
