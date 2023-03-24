@@ -13,7 +13,10 @@ import org.json.simple.JSONAware;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
@@ -90,6 +93,20 @@ public class ECommerceSDK {
             object = (T)JSONValue.parse(new InputStreamReader(call.getErrorStream()));
         }
         return object;
+    }
+    public <T extends JSONAware> T graphql(String payload){
+        Call<InputStream> call = new Call<InputStream>().url(getAdminApiUrl(),"graphql.json").header("content-type", "application/graphql")
+                .header("X-Shopify-Access-Token",getAccessToken())
+                .inputFormat(InputFormat.INPUT_STREAM)
+                .input(new ByteArrayInputStream(payload.getBytes(StandardCharsets.UTF_8)))
+                .method(HttpMethod.POST);
+
+        T o = call.getResponseAsJson();
+
+        if (o == null && call.hasErrors()){
+            o = (T)JSONValue.parse(new InputStreamReader(call.getErrorStream()));
+        }
+        return o;
     }
     public <T extends JSONAware> T get(String relativeUrl, JSONObject parameter){
         return get(relativeUrl,parameter,new IgnoreCaseMap<>());

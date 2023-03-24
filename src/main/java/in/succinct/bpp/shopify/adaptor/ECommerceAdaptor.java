@@ -55,6 +55,8 @@ import in.succinct.beckn.Provider;
 import in.succinct.beckn.Quantity;
 import in.succinct.beckn.Quote;
 import in.succinct.beckn.Request;
+import in.succinct.beckn.SellerException.GenericBusinessError;
+import in.succinct.beckn.SellerException.InvalidOrder;
 import in.succinct.beckn.SettlementDetail;
 import in.succinct.beckn.SettlementDetail.SettlementCounterparty;
 import in.succinct.beckn.SettlementDetail.SettlementPhase;
@@ -79,7 +81,6 @@ import in.succinct.bpp.shopify.model.DraftOrder.PaymentSchedule;
 import in.succinct.bpp.shopify.model.DraftOrder.PaymentSchedules;
 import in.succinct.bpp.shopify.model.DraftOrder.PaymentTerms;
 import in.succinct.bpp.shopify.model.DraftOrder.ShippingLine;
-
 import in.succinct.bpp.shopify.model.ProductImages;
 import in.succinct.bpp.shopify.model.ProductImages.ProductImage;
 import in.succinct.bpp.shopify.model.Products;
@@ -98,6 +99,7 @@ import org.json.simple.JSONObject;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -117,6 +119,15 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     }
 
 
+    public String getBecknTransactionId(DraftOrder draftOrder){
+       for (Tag noteAttribute : draftOrder.getNoteAttributes()) {
+            if (noteAttribute.getName().equals("context.transaction_id")){
+                return noteAttribute.getValue();
+            }
+        }
+        return null;
+    }
+
 
     public Order initializeDraftOrder(Request request) {
         DraftOrder draftOrder = new DraftOrder();
@@ -128,21 +139,16 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         Serviceability serviceability = f.getEnd() == null ? null : getProviderConfig().getServiceability(f.getType(),f.getEnd(),storeLocation);
         if (serviceability != null && !serviceability.isServiceable()){
-            throw new RuntimeException("Quote provided was invalidated.");
+            throw serviceability.getReason();
         }
 
-
-
-        BecknOrderMeta orderMeta = Database.getTable(BecknOrderMeta.class).newRecord();
-        orderMeta.setBecknTransactionId(request.getContext().getTransactionId());
-        orderMeta = Database.getTable(BecknOrderMeta.class).getRefreshed(orderMeta);
-
+        BecknOrderMeta orderMeta = getOrderMeta(request.getContext().getTransactionId());
 
         if (!ObjectUtil.isVoid(bo.getId())) {
             orderMeta.setBapOrderId(bo.getId());// Sent from bap.!
         }
 
-        if (!orderMeta.getRawRecord().isNewRecord() && !ObjectUtil.isVoid(orderMeta.getECommerceDraftOrderId())) {
+        if (!ObjectUtil.isVoid(orderMeta.getECommerceDraftOrderId())) {
             draftOrder.setId(orderMeta.getECommerceDraftOrderId());
         }
         draftOrder.setEmail(bo.getFulfillment().getEnd().getContact().getEmail());
@@ -172,6 +178,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         lastKnown.setBilling(bo.getBilling());
         lastKnown.setPayment(bo.getPayment());
+
         orderMeta.setOrderJson(lastKnown.getInner().toString()); //.getInner() needed to avoid getting the initialized string payload back.
         if (bo.getPayment() != null && bo.getPayment().getBuyerAppFinderFeeType() != null){
             orderMeta.setBuyerAppFinderFeeType(bo.getPayment().getBuyerAppFinderFeeType().toString());
@@ -199,6 +206,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (bo.getItems() != null) {
             bo.getItems().forEach(boItem -> {
                 in.succinct.bpp.search.db.model.Item dbItem = getItem(boItem.getId());
+                if (dbItem == null){
+                    return;
+                }
                 Item refreshedBoItem = new Item(dbItem.getObjectJson());
                 JSONObject inspectQuantity = (JSONObject) boItem.getInner().get("quantity");
                 if (inspectQuantity.containsKey("count")){
@@ -210,7 +220,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             });
         }
 
-        return saveDraftOrder(draftOrder, orderMeta);
+        return saveDraftOrder(draftOrder);
     }
 
     private void delete(DraftOrder draftOrder) {
@@ -225,8 +235,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 add(new Expression(select.getPool(), "APPLICATION_ID", Operator.EQ, getApplication().getId())).
                 add(new Expression(select.getPool(), "OBJECT_ID", Operator.EQ, objectId))).execute(1);
 
-        in.succinct.bpp.search.db.model.Item dbItem = dbItems.isEmpty() ? null : dbItems.get(0);
-        return dbItem;
+        return dbItems.isEmpty() ? null : dbItems.get(0);
     }
 
     private void addItem(DraftOrder draftOrder, Item item) {
@@ -252,8 +261,8 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     }
 
-    private TypeConverter<Double> doubleTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter();
-    private TypeConverter<Boolean> booleanTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(boolean.class).getTypeConverter();
+    private final TypeConverter<Double> doubleTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter();
+    private final TypeConverter<Boolean> booleanTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(boolean.class).getTypeConverter();
 
     public void setBilling(Billing source,DraftOrder target) {
 
@@ -313,23 +322,26 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         Contact contact = source.getEnd().getContact();
         GeoCoordinate gps = source.getEnd().getLocation().getGps();
-        if (address.getCountry() == null){
-            address.setCountry(getProviderConfig().getLocation().getAddress().getCountry());
+
+        if (address != null){
+            if (address.getCountry() == null){
+                address.setCountry(getProviderConfig().getLocation().getAddress().getCountry());
+            }
+            Country country = Country.findByName(address.getCountry());
+            State state = State.findByCountryAndName(country.getId(), address.getState());
+            City city = City.findByStateAndName(state.getId(), address.getCity());
+
+            String [] lines = address.getAddressLines();
+            shipping.setAddress1(lines[0]);
+            shipping.setAddress2(lines[1]);
+
+            shipping.setCity(city.getName());
+            shipping.setProvinceCode(state.getCode());
+            shipping.setProvince(state.getName());
+            shipping.setZip(address.getAreaCode());
+            shipping.setCountryCode(country.getIsoCode2());
+            shipping.setCountry(country.getName());
         }
-        Country country = Country.findByName(address.getCountry());
-        State state = State.findByCountryAndName(country.getId(), address.getState());
-        City city = City.findByStateAndName(state.getId(), address.getCity());
-
-        String [] lines = address.getAddressLines();
-        shipping.setAddress1(lines[0]);
-        shipping.setAddress2(lines[1]);
-
-        shipping.setCity(city.getName());
-        shipping.setProvinceCode(state.getCode());
-        shipping.setProvince(state.getName());
-        shipping.setZip(address.getAreaCode());
-        shipping.setCountryCode(country.getIsoCode2());
-        shipping.setCountry(country.getName());
         //shipping.put("email",contact.getEmail());
         shipping.setPhone(contact.getPhone());
         if (gps != null) {
@@ -338,22 +350,24 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
     }
 
-    public Order saveDraftOrder(DraftOrder draftOrder,   BecknOrderMeta orderMeta) {
+    @SuppressWarnings("unchecked")
+    private Order saveDraftOrder(DraftOrder draftOrder) {
         JSONObject dro = new JSONObject();
         dro.put("draft_order",draftOrder.getInner());
 
         JSONObject outOrder = helper.post("/draft_orders.json", dro);
         DraftOrder oDraftOrder = new DraftOrder((JSONObject) outOrder.get("draft_order"));
 
-        orderMeta.setECommerceDraftOrderId(oDraftOrder.getId());
-        orderMeta.save();
+        getOrderMeta().setECommerceDraftOrderId(oDraftOrder.getId());
 
-        return getBecknOrder(oDraftOrder,orderMeta);
+        return getBecknOrder(oDraftOrder);
 
     }
 
-    public Order confirmDraftOrder(Order inOrder,BecknOrderMeta orderMeta) {
-
+    @Override
+    @SuppressWarnings("unchecked")
+    public Order confirmDraftOrder(Order inOrder) {
+        BecknOrderMeta orderMeta = getOrderMeta();
         //Update with latest attributes.
         JSONObject parameter = new JSONObject();
         parameter.put("payment_pending", inOrder.getPayment().getStatus() != PaymentStatus.PAID);
@@ -365,24 +379,24 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (ObjectUtil.isVoid(orderMeta.getBapOrderId())) {
             orderMeta.setBapOrderId(BecknIdHelper.getBecknId(orderMeta.getECommerceOrderId(), getSubscriber(), Entity.order));
         }
-        orderMeta.save();
 
         response = helper.get(String.format("/orders/%s.json", draftOrder.getOrderId()), new JSONObject());
 
 
         in.succinct.bpp.shopify.model.Order order = new in.succinct.bpp.shopify.model.Order((JSONObject) response.get("order"));
-
+        orderMeta.setStatusReachedAt(Status.Accepted,order.getCreatedAt());
 
         return getBecknOrder(order);
     }
 
 
     @Override
+    @SuppressWarnings("unchecked")
     public String getTrackingUrl(Order order) {
-        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
-        meta.setBapOrderId(order.getId());
-        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
-
+        BecknOrderMeta meta = getOrderMeta();
+        if (!ObjectUtil.equals(order.getId(),meta.getBapOrderId())){
+            throw new InvalidOrder();
+        }
 
         JSONObject params = new JSONObject();
         params.put("fields", "tracking_urls");
@@ -401,10 +415,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     }
 
     @Override
-    public Order cancel(Order order) {
-        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
-        meta.setBapOrderId(order.getId());
-        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
+    @SuppressWarnings("unchecked")
+
+    public Order cancel(Order order ) {
+        BecknOrderMeta meta = getOrderMeta();
+        if (!ObjectUtil.equals(meta.getBapOrderId(),order.getId())){
+            throw new InvalidOrder();
+        }
 
         JSONObject params = new JSONObject();
         params.put("reason", "customer");
@@ -413,18 +430,18 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         JSONObject response = helper.post(String.format("/orders/%s/cancel.json", meta.getECommerceOrderId()), params);
         String error = (String)response.get("error");
         if (!ObjectUtil.isVoid(error)) {
-            throw new RuntimeException(error);
+            throw new GenericBusinessError(error);
         }
         in.succinct.bpp.shopify.model.Order eCommerceOrder = new in.succinct.bpp.shopify.model.Order((JSONObject) response.get("order"));
-        Order outOrder = getBecknOrder(eCommerceOrder);
-        return outOrder;
+        return getBecknOrder(eCommerceOrder);
     }
 
     @Override
     public Order getStatus(Order order) {
-        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
-        meta.setBapOrderId(order.getId());
-        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
+        BecknOrderMeta meta = getOrderMeta();
+        if (!ObjectUtil.equals(meta.getBapOrderId(),order.getId())){
+            throw new InvalidOrder();
+        }
 
         /* Take status message and fill response with on_status message */
         JSONObject response = helper.get(String.format("/orders/%s.json", meta.getECommerceOrderId()), new JSONObject());
@@ -440,6 +457,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
 
     @Override
+    @SuppressWarnings("unchecked")
     public Locations getProviderLocations() {
         return cache.get(Locations.class, () -> {
             Locations locations = new Locations();
@@ -466,7 +484,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 location.getAddress().setPinCode((String) store.get("zip"));
                 location.getAddress().setCountry((String) store.get("country"));
                 location.getAddress().setState((String) store.get("province"));
-                //location.setTime(getProviderConfig().getTime());
+                /* TODO
+                location.setCity(new in.succinct.beckn.City());
+                location.getCity().setCode(location.getAddress().getCity());
+                location.setCountry(new in.succinct.beckn.Country());
+                location.getCountry().setCode(location.getAddress().getCountry());
+                */
+                 //location.setTime(getProviderConfig().getTime());
                 location.setDescriptor(new Descriptor());
                 location.getDescriptor().setName(location.getAddress().getName());
 
@@ -580,7 +604,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                         item.setLocationIds(new BecknStrings());
                         item.getLocationIds().add(item.getLocationId());
 
-                        /** Yhis should be abtracted out TODO */
+                        /* Yhis should be abtracted out TODO */
                         if (getProviderConfig().getCategory().getDescriptor().getName().equals("Fruits and Vegetables")) {
                             item.setVeggiesFruits(new VeggiesFruits());
                             item.getVeggiesFruits().setNetQuantity(variant.getGrams() + " gms");
@@ -593,8 +617,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                         }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Commodities")) {
                             item.setPackagedCommodity(new PackagedCommodity());
                             item.getPackagedCommodity().setNetQuantityOrMeasureOfCommodityInPkg(variant.getGrams() + " gms");
-                            item.getPackagedCommodity().setManufacturerOfPackerName(getProviderConfig().getFulfillmentProviderName());
-                            item.getPackagedCommodity().setManufacturerOfPackerAddress(getProviderConfig().getLocation().getAddress().flatten());
+                            item.getPackagedCommodity().setManufacturerOrPackerName(getProviderConfig().getFulfillmentProviderName());
+                            item.getPackagedCommodity().setManufacturerOrPackerAddress(getProviderConfig().getLocation().getAddress().flatten());
+                            item.getPackagedCommodity().setCommonOrGenericNameOfCommodity(product.getProductType());
+                            //For statutory requirements show images.
                         }
 
 
@@ -628,17 +654,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                             item.getFulfillmentIds().add(fulfillment.getId());
                         }
 
-                        /*
-                        PackagedCommodity packagedCommodity = new PackagedCommodity();
-
-                        item.setPackagedCommodity(packagedCommodity);
-                        packagedCommodity.setManufacturerOfPackerAddress(item.getContactDetailsConsumerCare());
-                        packagedCommodity.setManufacturerOfPackerName(getProviderConfig().getStoreName());
-                        packagedCommodity.setCommonOrGenericNameOfCommodity(product.getProductType());
-                        packagedCommodity.setNetQuantityOrMeasureOfCommodityInPkg(variant.getGrams() + " Grams");
-                        */
-
-                        //For statutory requirements show images.
 
                         items.add(item);
 
@@ -650,7 +665,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     }
 
     public Map<String,Double> getTaxRateMap(){
-        Map<String,Double> taxRateMap = new Cache<>(0,0) {
+        return new Cache<>(0,0) {
             @Override
             protected Double getValue(String taxClass) {
                 if (!ObjectUtil.isVoid(taxClass)){
@@ -660,10 +675,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 return 0.0D;
             }
         };
-        return taxRateMap;
     }
 
 
+    @SuppressWarnings("unchecked")
     private InventoryLevels getInventoryLevels() {
         return cache.get(InventoryLevels.class,()->{
             StringBuilder locationIds = new StringBuilder();
@@ -686,9 +701,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 input.remove("location_ids");
                 if (pageInventoryLevels.data != null ){
                     JSONArray inventoryLevels = (JSONArray) pageInventoryLevels.data.get("inventory_levels");
-                    inventoryLevels.forEach(o -> {
-                        levels.add(new InventoryLevel((JSONObject) o));
-                    });
+                    inventoryLevels.forEach(o -> levels.add(new InventoryLevel((JSONObject) o)));
                 }else {
                     break;
                 }
@@ -696,6 +709,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             return levels;
         });
     }
+    @SuppressWarnings("unchecked")
     private Products getProducts(){
         return cache.get(Products.class,()->{
             JSONObject input = new JSONObject();
@@ -725,6 +739,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         });
     }
 
+    @SuppressWarnings("unchecked")
     private InventoryItems getInventoryItems(Set<Long> ids){
         if (ids.isEmpty()){
             return new InventoryItems();
@@ -749,9 +764,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 input.remove("ids");
                 if (pageInventoryItems.data != null) {
                     JSONArray inventoryItemsArray = (JSONArray) pageInventoryItems.data.get("inventory_items");
-                    inventoryItemsArray.forEach(o -> {
-                        inventoryItems.add(new InventoryItem((JSONObject) o));
-                    });
+                    inventoryItemsArray.forEach(o -> inventoryItems.add(new InventoryItem((JSONObject) o)));
                 }else{
                     break;
                 }
@@ -779,19 +792,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     //Get Beckn Order
 
     public Order getBecknOrder(DraftOrder eCommerceOrder) {
-
-        BecknOrderMeta meta = Database.getTable(BecknOrderMeta.class).newRecord();
-        if (eCommerceOrder instanceof in.succinct.bpp.shopify.model.Order) {
-            meta.setECommerceOrderId(eCommerceOrder.getId());
-        }else {
-            meta.setECommerceDraftOrderId(eCommerceOrder.getId());
-        }
-        meta = Database.getTable(BecknOrderMeta.class).getRefreshed(meta);
-
-        return getBecknOrder(eCommerceOrder,meta);
-    }
-    public Order getBecknOrder(DraftOrder eCommerceOrder,BecknOrderMeta meta) {
-
+        BecknOrderMeta meta = getOrderMeta(getBecknTransactionId(eCommerceOrder));
         Order lastReturnedOrderJson = new Order(meta.getOrderJson());
         String fulfillmentId = "fulfillment/"+ FulfillmentType.home_delivery+"/"+meta.getBecknTransactionId();
         Order order = new Order();
@@ -799,6 +800,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (lastReturnedOrderJson.getPayment() != null) {
             order.getPayment().update(lastReturnedOrderJson.getPayment());
         }
+
+        eCommerceOrder.loadMetaFields(helper);
+
 
         //if (order.getPayment().getStatus() != PaymentStatus.PAID){
 
@@ -816,12 +820,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (feeAmount != null) {
             if (order.getPayment().getBuyerAppFinderFeeType() == CommissionType.Percent) {
                 if (feeAmount > getProviderConfig().getMaxAllowedCommissionPercent()) {
-                    throw new RuntimeException("Max commission percent exceeded");
+                    throw new GenericBusinessError("Max commission percent exceeded");
                 }
             } else {
                 double pct = new DoubleHolder(100.0 * feeAmount / order.getPayment().getParams().getAmount(), 2).getHeldDouble().doubleValue();
                 if (pct > getProviderConfig().getMaxAllowedCommissionPercent()) {
-                    throw new RuntimeException("Max commission percent exceeded");
+                    throw new GenericBusinessError("Max commission percent exceeded");
                 }
             }
         }else {
@@ -848,10 +852,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             shippingPrice.setValue(eCommerceOrder.getShippingLine().getPrice());
         }
 
-        /* BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.item,"Total Product",productPrice);
-        quote.getBreakUp().add(element);
 
-         */
         BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.tax,"Tax",tax);
         element.setItemId(fulfillmentId);
         quote.getBreakUp().add(element);
@@ -862,27 +863,37 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             quote.getBreakUp().add(element);
         }
 
-        /* element = quote.getBreakUp().createElement(BreakUpCategory.item,"Total",total);
-        quote.getBreakUp().add(element);
-        */
-
-
         //Delivery is included
 
 
         setBilling(order,eCommerceOrder.getBillingAddress());
         //order.setId(meta.getBapOrderId());
+
+        if (!ObjectUtil.isVoid(eCommerceOrder.getInvoiceUrl())) {
+            order.setDocuments(new Documents());
+            Document invoice = new Document();
+            order.getDocuments().add(invoice);
+            invoice.setLabel("invoice");
+            invoice.setUrl(eCommerceOrder.getInvoiceUrl());
+            meta.setStatusReachedAt(Status.Packed,new Date());
+        }
+
         Status orderStatus = eCommerceOrder.getStatus();
-        if (orderStatus == null && eCommerceOrder instanceof in.succinct.bpp.shopify.model.Order){
-            if (eCommerceOrder.getCancelledAt() != null){
+        if (orderStatus == null && eCommerceOrder instanceof in.succinct.bpp.shopify.model.Order) {
+            if (eCommerceOrder.getCancelledAt() != null) {
                 orderStatus = Status.Cancelled;
-            }else if (eCommerceOrder.getCompletedAt() != null){
+            } else if (eCommerceOrder.getCompletedAt() != null) {
                 orderStatus = Status.Completed;
+            } else if (!ObjectUtil.isVoid(eCommerceOrder.getFulfillments().size() > 0)){
+                orderStatus = Status.Out_for_delivery;
+            } else if (!ObjectUtil.isVoid(eCommerceOrder.getInvoiceUrl())) {
+                orderStatus = Status.Packed;
             }else {
                 orderStatus = Status.Accepted;
             }
         }
         order.setState(orderStatus);
+        meta.setStatusReachedAt(orderStatus,new Date());
         order.setItems(new Items());
 
         eCommerceOrder.getLineItems().forEach(lineItem -> {
@@ -951,17 +962,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         order.setCreatedAt(eCommerceOrder.getCreatedAt());
         order.setUpdatedAt(eCommerceOrder.getUpdatedAt());
-        /*
-        order.setDocuments( new Documents());
-        Document invoice = new Document();
-        order.getDocuments().add(invoice);
-        invoice.setLabel("invoice");
-        invoice.setUrl(""); // Shopify doesnot give any url right now , Even Data url seems to be iffy
 
-         */
 
-        meta.setOrderJson(order.toString());
-        meta.save();
+
+
 
 
         return order;
@@ -1042,21 +1046,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         detail.setSettlementCounterparty(SettlementCounterparty.SELLER_APP);
         detail.setSettlementStatus(PaymentStatus.NOT_PAID);
         boolean paid = isPaid(eCommerceOrder.getPaymentTerms());
-        boolean isSettled = false;
-        if (eCommerceOrder instanceof in.succinct.bpp.shopify.model.Order){
-            JSONObject meta = helper.get(String.format("/orders/%s/metafields.json",StringUtil.valueOf(eCommerceOrder.getId())),new JSONObject());
-            JSONArray metafieldArray = (JSONArray) meta.get("metafields");
-            Metafields metafields = new Metafields(metafieldArray);
-            for (Metafield m : metafields){
-                if (m.getKey().equals("settled")) {
-                    isSettled = Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue());
-                    break;
-                }
-            }
-        }
-
-
-
+        boolean isSettled = eCommerceOrder.isSettled();
 
         if (payment.getCollectedBy() == CollectedBy.BPP){
             if (paid) {

@@ -4,6 +4,7 @@ import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Order.Status;
+import in.succinct.bpp.shopify.model.Products.Metafields;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 

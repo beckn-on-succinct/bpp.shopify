@@ -1,6 +1,7 @@
 package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
+import com.venky.swf.db.Database;
 import com.venky.swf.plugins.collab.db.model.config.City;
 import com.venky.swf.plugins.collab.db.model.config.Country;
 import com.venky.swf.plugins.collab.db.model.config.State;
@@ -10,6 +11,10 @@ import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Tag;
+import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
+import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
+import in.succinct.bpp.shopify.model.Products.Metafield;
+import in.succinct.bpp.shopify.model.Products.Metafields;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
@@ -179,6 +184,13 @@ public class DraftOrder extends ShopifyObjectWithId {
         set("shipping_line",shipping_line);
     }
 
+    public Metafields getMetafields(){
+        return get(Metafields.class, "metafields");
+    }
+    public void setMetafields(Metafields metafields){
+        set("metafields",metafields);
+    }
+
     static Map<String, Status> fulfillmentStatusMap = new HashMap<>() {{
         put("fulfilled",Status.Completed);
         put("restocked",Status.Cancelled);
@@ -201,6 +213,39 @@ public class DraftOrder extends ShopifyObjectWithId {
             }
         }
         return status;
+    }
+
+    public boolean isSettled(){
+        return getBoolean("settled");
+    }
+    public void setSettled(boolean settled){
+        set("settled",settled);
+    }
+
+    public void loadMetaFields(ECommerceSDK helper) {
+        Metafields metafields = getMetafields();
+        if (metafields != null){
+            return;
+        }
+        String name = StringUtil.underscorize(getClass().getSimpleName()).toLowerCase();
+
+        JSONObject meta = helper.get(String.format("/%s/%s/metafields.json",name,StringUtil.valueOf(getId())),new JSONObject());
+        JSONArray metafieldArray = (JSONArray) meta.get("metafields");
+        setMetafields(new Metafields(metafieldArray));
+
+        for (Metafield m : metafields){
+            if (m.getKey().equals("settled")) {
+                setSettled(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
+            }else if (m.getKey().equals("invoice_url")){
+                JSONObject o = helper.graphql(String.format("{node(id:\"%s\"){ id ... on GenericFile { url  , alt ,fileStatus} }}",m.getValue()));
+                JSONObject data = (JSONObject) o.get("data");
+                JSONObject node = (JSONObject) data.get("node");
+                if (node != null) {
+                    setInvoiceUrl((String) o.get("url"));
+                }
+            }
+        }
+
     }
 
 
