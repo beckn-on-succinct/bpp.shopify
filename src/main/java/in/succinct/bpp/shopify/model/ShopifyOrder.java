@@ -11,7 +11,6 @@ import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Tag;
-import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
 import in.succinct.bpp.shopify.model.Products.Metafield;
 import in.succinct.bpp.shopify.model.Products.Metafields;
@@ -20,34 +19,18 @@ import org.json.simple.JSONObject;
 
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
-import java.util.Map.Entry;
 
-public class DraftOrder extends ShopifyObjectWithId {
-    public DraftOrder(){
+public class ShopifyOrder extends ShopifyObjectWithId {
+    public ShopifyOrder(){
         super();
     }
-    public DraftOrder(JSONObject eCommerceOrder) {
+    public ShopifyOrder(JSONObject eCommerceOrder) {
         super(eCommerceOrder);
     }
 
-    public String getOrderId(){
-        return StringUtil.valueOf(get("order_id"));
-    }
-    
-    public String getName(){
-        return get("name");
-    }
-    public void setName(String name){
-        set("name",name);
-    }
-
-    public Address getShippingAddress(){
-        return get(Address.class, "shipping_address");
-    }
-    public void setShippingAddress(Address shipping_address){
-        set("shipping_address",shipping_address);
+    public String getAppId(){
+        return get("app_id");
     }
 
     public Address getBillingAddress(){
@@ -55,6 +38,91 @@ public class DraftOrder extends ShopifyObjectWithId {
     }
     public void setBillingAddress(Address billing_address){
         set("billing_address",billing_address);
+    }
+
+
+    public String getCurrency(){
+        return get("currency");
+    }
+    public void setCurrency(String currency){
+        set("currency",currency);
+    }
+
+    public Date getCreatedAt(){
+        return getTimestamp("created_at");
+    }
+    public void setCreatedAt(Date created_at){
+        set("created_at",created_at,TIMESTAMP_FORMAT);
+    }
+
+    public String getCancelReason(){
+        return get("cancel_reason");
+    }
+    public void setCancelReason(String cancel_reason){
+        set("cancel_reason",cancel_reason);
+    }
+
+    public Date getCancelledAt(){
+        return getTimestamp("cancelled_at");
+    }
+    public void setCancelledAt(Date cancelled_at){
+        set("cancelled_at",cancelled_at,TIMESTAMP_FORMAT);
+    }
+
+    public Date getCompletedAt(){
+        return getTimestamp("completed_at");
+    }
+    public void setCompletedAt(Date completed_at){
+        set("completed_at",completed_at,TIMESTAMP_FORMAT);
+    }
+
+
+
+    public String getEmail(){
+        return get("email");
+    }
+    public void setEmail(String email){
+        set("email",email);
+    }
+
+    public boolean isEstimatedTaxes(){
+        return getBoolean("estimated_taxes");
+    }
+    public void setEstimatedTaxes(boolean estimated_taxes){
+        set("estimated_taxes",estimated_taxes);
+    }
+
+
+    public String getFinancialStatus(){
+        return get("financial_status");
+    }
+    public void setFinancialStatus(String financial_status){
+        set("financial_status",financial_status);
+    }
+
+
+    public Fulfillments getFulfillments(){
+        return get(Fulfillments.class, "fulfillments");
+    }
+
+    public LineItems getLineItems(){
+        return get(LineItems.class, "line_items");
+    }
+    public void setLineItems(LineItems line_items){
+        set("line_items",line_items);
+    }
+
+
+    public long getLocationId(){
+        return getLong("location_id");
+    }
+
+
+    public String getName(){
+        return get("name");
+    }
+    public void setName(String name){
+        set("name",name);
     }
 
     public String getNote(){
@@ -72,40 +140,105 @@ public class DraftOrder extends ShopifyObjectWithId {
         set("note_attributes",note_attributes);
     }
 
-    public String getEmail(){
-        return get("email");
-    }
-    public void setEmail(String email){
-        set("email",email);
+    public long getNumber(){
+        return getLong("number");
     }
 
-    public String getCurrency(){
-        return get("currency");
-    }
-    public void setCurrency(String currency){
-        set("currency",currency);
+    public long getOrderNumber(){
+        return getLong("order_number");
     }
 
-    public String getSource(){
-        return get("source");
+
+    public PaymentTerms getPaymentTerms(){
+        return get(PaymentTerms.class, "payment_terms");
     }
-    public void setSource(String source){
-        set("source",source);
+    public void setPaymentTerms(PaymentTerms payment_terms){
+        set("payment_terms",payment_terms);
     }
 
-    public Date getCreatedAt(){
-        return getTimestamp("created_at");
+
+    public String getPhone(){
+        return get("phone");
     }
-    public void setCreatedAt(Date created_at){
-        set("created_at",created_at,TIMESTAMP_FORMAT);
+    public void setPhone(String phone){
+        set("phone",phone);
     }
 
-    public Date getCancelledAt(){
-        return getTimestamp("cancelled_at");
+
+
+    public Address getShippingAddress(){
+        return get(Address.class, "shipping_address");
     }
-    public void setCancelledAt(Date cancelled_at){
-        set("cancelled_at",cancelled_at,TIMESTAMP_FORMAT);
+    public void setShippingAddress(Address shipping_address){
+        set("shipping_address",shipping_address);
     }
+
+
+    public String getSourceName(){
+        return get("source_name");
+    }
+    public void setSourceName(String source_name){
+        set("source_name",source_name);
+    }
+
+
+    public double getSubtotalPrice(){
+        return getDouble("subtotal_price");
+    }
+    public void setSubtotalPrice(double subtotal_price){
+        set("subtotal_price",subtotal_price);
+    }
+
+
+    public String getTags(){
+        return get("tags");
+    }
+    public void setTags(String tags){
+        set("tags",tags);
+    }
+    public boolean getTaxesIncluded(){
+        return getBoolean("taxes_included");
+    }
+    public void setTaxesIncluded(boolean taxes_included){
+        set("taxes_included",taxes_included);
+    }
+
+    public boolean isTest(){
+        return getBoolean("test");
+    }
+    public void setTest(boolean test){
+        set("test",test);
+    }
+
+    public Transactions getTransactions(){
+        return get(Transactions.class, "transactions");
+    }
+    public void setTransactions(Transactions transactions){
+        set("transactions",transactions);
+    }
+
+
+    public double getTotalTax(){
+        return getDouble("total_tax");
+    }
+    public void setTotalTax(double total_tax){
+        set("total_tax",total_tax);
+    }
+
+    public double getTotalPrice(){
+        return getDouble("total_price");
+    }
+    public void setTotalPrice(double total_price){
+        set("total_price",total_price);
+    }
+
+    public double getTotalWeight(){
+        return getDouble("total_weight");
+    }
+    public void setTotalWeight(double total_weight){
+        set("total_weight",total_weight);
+    }
+
 
     public Date getUpdatedAt(){
         return getTimestamp("updated_at");
@@ -113,6 +246,7 @@ public class DraftOrder extends ShopifyObjectWithId {
     public void setUpdatedAt(Date updated_at){
         set("updated_at",updated_at,TIMESTAMP_FORMAT);
     }
+
 
 
     public Date getInvoiceSentAt(){
@@ -129,59 +263,28 @@ public class DraftOrder extends ShopifyObjectWithId {
         set("invoice_url",invoice_url);
     }
 
-    public PaymentTerms getPaymentTerms(){
-        return get(PaymentTerms.class, "payment_terms");
-    }
-    public void setPaymentTerms(PaymentTerms payment_terms){
-        set("payment_terms",payment_terms);
-    }
 
-    public LineItems getLineItems(){
-        return get(LineItems.class, "line_items");
-    }
-    public void setLineItems(LineItems line_items){
-        set("line_items",line_items);
-    }
-
-    public boolean getTaxesIncluded(){
-        return getBoolean("taxes_included");
-    }
-    public void setTaxesIncluded(boolean taxes_included){
-        set("taxes_included",taxes_included);
-    }
-
-    public double getTotalTax(){
-        return getDouble("total_tax");
-    }
-    public void setTotalTax(double total_tax){
-        set("total_tax",total_tax);
-    }
-    public double getSubtotalPrice(){
-        return getDouble("subtotal_price");
-    }
-    public void setSubtotalPrice(double subtotal_price){
-        set("subtotal_price",subtotal_price);
-    }
-
-    public double getTotalPrice(){
-        return getDouble("total_price");
-    }
-    public void setTotalPrice(double total_price){
-        set("total_price",total_price);
-    }
-
-    public Date getCompletedAt(){
-        return getTimestamp("completed_at");
-    }
-    public void setCompletedAt(Date completed_at){
-        set("completed_at",completed_at,TIMESTAMP_FORMAT);
-    }
 
     public ShippingLine getShippingLine(){
-        return get(ShippingLine.class, "shipping_line");
+        ShippingLines shippingLines = getShippingLines();
+        if (shippingLines.size() > 0) {
+            return shippingLines.get(0);
+        }
+        return null;
     }
     public void setShippingLine(ShippingLine shipping_line){
-        set("shipping_line",shipping_line);
+        ShippingLines shippingLines = getShippingLines();
+        if (shippingLines.size() > 0){
+            shippingLines.clear();
+        }
+        shippingLines.add(shipping_line);
+    }
+
+    public ShippingLines getShippingLines(){
+        return get(ShippingLines.class, "shipping_lines", true);
+    }
+    public void setShippingLines(ShippingLines shipping_lines){
+        set("shipping_lines",shipping_lines);
     }
 
     public Metafields getMetafields(){
@@ -227,11 +330,11 @@ public class DraftOrder extends ShopifyObjectWithId {
         if (metafields != null){
             return;
         }
-        String name = StringUtil.underscorize(getClass().getSimpleName()).toLowerCase();
 
-        JSONObject meta = helper.get(String.format("/%s/%s/metafields.json",name,StringUtil.valueOf(getId())),new JSONObject());
+        JSONObject meta = helper.get(String.format("/orders/%s/metafields.json",StringUtil.valueOf(getId())),new JSONObject());
         JSONArray metafieldArray = (JSONArray) meta.get("metafields");
-        setMetafields(new Metafields(metafieldArray));
+        metafields = new Metafields(metafieldArray);
+        setMetafields(metafields);
 
         for (Metafield m : metafields){
             if (m.getKey().equals("settled")) {
@@ -248,7 +351,11 @@ public class DraftOrder extends ShopifyObjectWithId {
 
     }
 
-
+    public static class ShippingLines extends BecknObjects<ShippingLine>{
+        public ShippingLines(){
+            super();
+        }
+    }
     public static class ShippingLine extends BecknObject{
         public boolean getCustom(){
             return getBoolean("custom");
@@ -629,6 +736,7 @@ public class DraftOrder extends ShopifyObjectWithId {
 
             address.setPinCode(getZip());
             Country country= Country.findByISO(getCountryCode());
+            address.setCountry(country.getName());
 
             State state =  null ;
             if (getProvince() != null) {
@@ -637,11 +745,11 @@ public class DraftOrder extends ShopifyObjectWithId {
                 state = State.findByCountryAndName(country.getId(),getProvinceCode());
             }
 
-            City city = City.findByStateAndName(state.getId(),getCity());
-
-            address.setCountry(country.getName());
-            address.setState(state.getName());
-            address.setCity(city.getName());
+            if (state != null) {
+                address.setState(state.getName());
+                City city = City.findByStateAndName(state.getId(), getCity());
+                address.setCity(city.getName());
+            }
             return address;
         }
     }
@@ -683,8 +791,53 @@ public class DraftOrder extends ShopifyObjectWithId {
         }
     }
 
-    public Fulfillments getFulfillments(){
-        return get(Fulfillments.class, "fulfillments");
+    public static class Transactions extends BecknObjects<Transaction> {
+        public Transactions(){
+            super();
+        }
+        public Transactions(JSONArray array){
+            super(array);
+        }
     }
 
+    public static class Transaction extends ShopifyObjectWithId {
+        public Transaction(JSONObject o){
+            super(o);
+        }
+        public Transaction(){
+
+        }
+        public long getParentId(){
+            return getLong("parent_id");
+        }
+        public void setParentId(long parent_id){
+            set("parent_id",parent_id);
+        }
+
+        public boolean isTest(){
+            return getBoolean("test");
+        }
+        public void setTest(boolean test){
+            set("test",test);
+        }
+        public String getKind(){
+            return get("kind");
+        }
+        public void setKind(String kind){
+            set("kind",kind);
+        }
+        public String getStatus(){
+            return get("status");
+        }
+        public void setStatus(String status){
+            set("status",status);
+        }
+
+        public int getAmount(){
+            return getInteger("amount");
+        }
+        public void setAmount(int amount){
+            set("amount",amount);
+        }
+    }
 }

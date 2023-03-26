@@ -14,6 +14,7 @@ import com.venky.swf.plugins.collab.db.model.config.City;
 import com.venky.swf.plugins.collab.db.model.config.Country;
 import com.venky.swf.plugins.collab.db.model.config.State;
 import com.venky.swf.plugins.gst.db.model.assets.AssetCode;
+import com.venky.swf.routing.Config;
 import com.venky.swf.sql.Conjunction;
 import com.venky.swf.sql.Expression;
 import com.venky.swf.sql.Operator;
@@ -56,7 +57,7 @@ import in.succinct.beckn.Quantity;
 import in.succinct.beckn.Quote;
 import in.succinct.beckn.Request;
 import in.succinct.beckn.SellerException.GenericBusinessError;
-import in.succinct.beckn.SellerException.InvalidOrder;
+import in.succinct.beckn.SellerException.OrderConfirmFailure;
 import in.succinct.beckn.SettlementDetail;
 import in.succinct.beckn.SettlementDetail.SettlementCounterparty;
 import in.succinct.beckn.SettlementDetail.SettlementPhase;
@@ -69,18 +70,9 @@ import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.adaptor.TimeSensitiveCache;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper.Entity;
-import in.succinct.bpp.core.db.model.BecknOrderMeta;
+import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.ProviderConfig.Serviceability;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK.Page;
-import in.succinct.bpp.shopify.model.DraftOrder;
-import in.succinct.bpp.shopify.model.DraftOrder.Fulfillments;
-import in.succinct.bpp.shopify.model.DraftOrder.LineItem;
-import in.succinct.bpp.shopify.model.DraftOrder.LineItems;
-import in.succinct.bpp.shopify.model.DraftOrder.NoteAttributes;
-import in.succinct.bpp.shopify.model.DraftOrder.PaymentSchedule;
-import in.succinct.bpp.shopify.model.DraftOrder.PaymentSchedules;
-import in.succinct.bpp.shopify.model.DraftOrder.PaymentTerms;
-import in.succinct.bpp.shopify.model.DraftOrder.ShippingLine;
 import in.succinct.bpp.shopify.model.ProductImages;
 import in.succinct.bpp.shopify.model.ProductImages.ProductImage;
 import in.succinct.bpp.shopify.model.Products;
@@ -88,10 +80,19 @@ import in.succinct.bpp.shopify.model.Products.InventoryItem;
 import in.succinct.bpp.shopify.model.Products.InventoryItems;
 import in.succinct.bpp.shopify.model.Products.InventoryLevel;
 import in.succinct.bpp.shopify.model.Products.InventoryLevels;
-import in.succinct.bpp.shopify.model.Products.Metafield;
-import in.succinct.bpp.shopify.model.Products.Metafields;
 import in.succinct.bpp.shopify.model.Products.Product;
 import in.succinct.bpp.shopify.model.Products.ProductVariant;
+import in.succinct.bpp.shopify.model.ShopifyOrder;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Fulfillments;
+import in.succinct.bpp.shopify.model.ShopifyOrder.LineItem;
+import in.succinct.bpp.shopify.model.ShopifyOrder.LineItems;
+import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
+import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedule;
+import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedules;
+import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentTerms;
+import in.succinct.bpp.shopify.model.ShopifyOrder.ShippingLine;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Transaction;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Transactions;
 import in.succinct.bpp.shopify.model.Store;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
@@ -99,7 +100,6 @@ import org.json.simple.JSONObject;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -119,7 +119,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     }
 
 
-    public String getBecknTransactionId(DraftOrder draftOrder){
+    public String getBecknTransactionId(ShopifyOrder draftOrder){
        for (Tag noteAttribute : draftOrder.getNoteAttributes()) {
             if (noteAttribute.getName().equals("context.transaction_id")){
                 return noteAttribute.getValue();
@@ -130,7 +130,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
 
     public Order initializeDraftOrder(Request request) {
-        DraftOrder draftOrder = new DraftOrder();
+        ShopifyOrder shopifyOrder = new ShopifyOrder();
         Order bo = request.getMessage().getOrder();
         fixFulfillment(request.getContext(), bo);
         fixLocation(bo);
@@ -142,49 +142,25 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             throw serviceability.getReason();
         }
 
-        BecknOrderMeta orderMeta = getOrderMeta(request.getContext().getTransactionId());
+        shopifyOrder.setId(LocalOrderSynchronizer.getInstance().getLocalOrderId(request.getContext().getTransactionId()));
 
-        if (!ObjectUtil.isVoid(bo.getId())) {
-            orderMeta.setBapOrderId(bo.getId());// Sent from bap.!
-        }
-
-        if (!ObjectUtil.isVoid(orderMeta.getECommerceDraftOrderId())) {
-            draftOrder.setId(orderMeta.getECommerceDraftOrderId());
-        }
-        draftOrder.setEmail(bo.getFulfillment().getEnd().getContact().getEmail());
-        draftOrder.setCurrency("INR");
-        draftOrder.setSource("beckn");
-        draftOrder.setName("beckn-" + request.getContext().getTransactionId());
-        draftOrder.setNoteAttributes(new NoteAttributes());
+        shopifyOrder.setCurrency("INR");
+        shopifyOrder.setSourceName("beckn");
+        shopifyOrder.setName("beckn-" + request.getContext().getTransactionId());
+        shopifyOrder.setNoteAttributes(new NoteAttributes());
 
         for (String key : new String[]{"bap_id", "bap_uri", "domain", "transaction_id", "city", "country", "core_version"}) {
             Tag meta = new Tag();
             meta.setName(String.format("context.%s", key));
             meta.setValue(request.getContext().get(key));
-            draftOrder.getNoteAttributes().add(meta);
+            shopifyOrder.getNoteAttributes().add(meta);
         }
 
-        if (!ObjectUtil.isVoid(draftOrder.getId())) {
-            delete(draftOrder);
+        if (!ObjectUtil.isVoid(shopifyOrder.getId())) {
+            delete(shopifyOrder);
         }
 
-        Order lastKnown = new Order(orderMeta.getOrderJson());
-        lastKnown.setFulfillments(bo.getFulfillments());
-        lastKnown.setProviderLocation(bo.getProviderLocation());
-        lastKnown.setItems(bo.getItems());
-        lastKnown.setFulfillment(bo.getFulfillment());
-        if (lastKnown.getFulfillments().size() > 0) {
-            lastKnown.setFulfillment(lastKnown.getFulfillments().get(0));
-        }
-        lastKnown.setBilling(bo.getBilling());
-        lastKnown.setPayment(bo.getPayment());
-
-        orderMeta.setOrderJson(lastKnown.getInner().toString()); //.getInner() needed to avoid getting the initialized string payload back.
-        if (bo.getPayment() != null && bo.getPayment().getBuyerAppFinderFeeType() != null){
-            orderMeta.setBuyerAppFinderFeeType(bo.getPayment().getBuyerAppFinderFeeType().toString());
-            orderMeta.setBuyerAppFinderFeeAmount(doubleTypeConverter.valueOf(bo.getPayment().getBuyerAppFinderFeeAmount()));
-        }
-        setShipping( bo.getFulfillment(), draftOrder);
+        setShipping( bo.getFulfillment(), shopifyOrder);
 
         if (bo.getBilling() == null){
             bo.setBilling(new Billing());
@@ -193,13 +169,15 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             bo.getBilling().setAddress(bo.getFulfillment().getEnd().getLocation().getAddress());
         }
 
-        setBilling( bo.getBilling(),draftOrder);
+        setBilling( bo.getBilling(),shopifyOrder);
+        Bucket totalPrice = new Bucket();
 
         if (serviceability != null) {
             ShippingLine shippingLine = new ShippingLine();
             shippingLine.setTitle("Standard");
             shippingLine.setPrice(serviceability.getCharges());
-            draftOrder.setShippingLine(shippingLine);
+            shopifyOrder.setShippingLine(shippingLine);
+            totalPrice.increment(serviceability.getCharges());
         }
 
 
@@ -216,15 +194,28 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 }else {
                     refreshedBoItem.setItemQuantity(boItem.getItemQuantity());
                 }
-                addItem(draftOrder, refreshedBoItem);
+                LineItem lineItem = addItem(shopifyOrder, refreshedBoItem);
+                totalPrice.increment(refreshedBoItem.getPrice().getValue() * lineItem.getQuantity());
             });
         }
 
-        return saveDraftOrder(draftOrder);
+        if (Config.instance().isDevelopmentEnvironment()){
+            shopifyOrder.setTest(true);
+            shopifyOrder.setTransactions(new Transactions());
+            Transactions transactions = shopifyOrder.getTransactions();
+            transactions.add(new Transaction(){{
+                setTest(true);
+                setKind("authorization");
+                setStatus("success");
+                setAmount(totalPrice.intValue());
+            }});
+        }
+
+        return saveDraftOrder(shopifyOrder);
     }
 
-    private void delete(DraftOrder draftOrder) {
-        helper.delete(String.format("/draft_orders/%s.json",draftOrder.getId()) , new JSONObject());
+    private void delete(ShopifyOrder draftOrder) {
+        helper.delete(String.format("/orders/%s.json",draftOrder.getId()) , new JSONObject());
         draftOrder.rm("id");
     }
 
@@ -238,7 +229,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         return dbItems.isEmpty() ? null : dbItems.get(0);
     }
 
-    private void addItem(DraftOrder draftOrder, Item item) {
+    private LineItem addItem(ShopifyOrder draftOrder, Item item) {
         LineItems line_items = draftOrder.getLineItems();
         if (line_items == null) {
             line_items = new LineItems();
@@ -258,18 +249,18 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         lineItem.setRequiresShipping(true);
         lineItem.setTaxable(doubleTypeConverter.valueOf(item.getTags().get("tax_rate")) > 0);
         line_items.add(lineItem);
-
+        return lineItem;
     }
 
     private final TypeConverter<Double> doubleTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter();
     private final TypeConverter<Boolean> booleanTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(boolean.class).getTypeConverter();
 
-    public void setBilling(Billing source,DraftOrder target) {
+    public void setBilling(Billing source, ShopifyOrder target) {
 
         if (source == null) {
             return;
         }
-        DraftOrder.Address billing = new DraftOrder.Address();
+        ShopifyOrder.Address billing = new ShopifyOrder.Address();
         target.setBillingAddress(billing);
 
         String[] parts = source.getName().split(" ");
@@ -297,11 +288,11 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     }
 
-    public void setShipping(Fulfillment source,DraftOrder target) {
+    public void setShipping(Fulfillment source, ShopifyOrder target) {
         if (source == null) {
             return;
         }
-        DraftOrder.Address shipping = new DraftOrder.Address();
+        ShopifyOrder.Address shipping = new ShopifyOrder.Address();
         target.setShippingAddress(shipping);
 
         User user = source.getCustomer();
@@ -344,6 +335,8 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         //shipping.put("email",contact.getEmail());
         shipping.setPhone(contact.getPhone());
+        target.setPhone(contact.getPhone());
+        target.setEmail(contact.getEmail());
         if (gps != null) {
             shipping.setLatitude(gps.getLat().doubleValue());
             shipping.setLongitude(gps.getLng().doubleValue());
@@ -351,61 +344,56 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     }
 
     @SuppressWarnings("unchecked")
-    private Order saveDraftOrder(DraftOrder draftOrder) {
+    private Order saveDraftOrder(ShopifyOrder draftOrder) {
         JSONObject dro = new JSONObject();
-        dro.put("draft_order",draftOrder.getInner());
+        dro.put("order",draftOrder.getInner());
 
-        JSONObject outOrder = helper.post("/draft_orders.json", dro);
-        DraftOrder oDraftOrder = new DraftOrder((JSONObject) outOrder.get("draft_order"));
+        JSONObject outOrder = helper.post("/orders.json", dro);
+        ShopifyOrder oDraftOrder = new ShopifyOrder((JSONObject) outOrder.get("order"));
 
-        getOrderMeta().setECommerceDraftOrderId(oDraftOrder.getId());
 
         return getBecknOrder(oDraftOrder);
 
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public Order confirmDraftOrder(Order inOrder) {
-        BecknOrderMeta orderMeta = getOrderMeta();
-        //Update with latest attributes.
-        JSONObject parameter = new JSONObject();
-        parameter.put("payment_pending", inOrder.getPayment().getStatus() != PaymentStatus.PAID);
-        JSONObject response = helper.putViaPost(String.format("/draft_orders/%s/complete.json", orderMeta.getECommerceDraftOrderId()), parameter); //Marks payment as paid!
+        String shopifyOrderId = LocalOrderSynchronizer.getInstance().getLocalOrderId(inOrder);
+        JSONObject response = helper.get(String.format("/orders/%s.json", shopifyOrderId), new JSONObject());
+        ShopifyOrder shopifyOrder = new ShopifyOrder((JSONObject) response.get("order"));
 
-        DraftOrder draftOrder = new DraftOrder((JSONObject) response.get("draft_order"));
+        if (Config.instance().isDevelopmentEnvironment()) {
+            JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", shopifyOrderId), new JSONObject());
+            Transactions transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
 
-        orderMeta.setECommerceOrderId(draftOrder.getOrderId());
-        if (ObjectUtil.isVoid(orderMeta.getBapOrderId())) {
-            orderMeta.setBapOrderId(BecknIdHelper.getBecknId(orderMeta.getECommerceOrderId(), getSubscriber(), Entity.order));
+            Transaction transaction = transactions.get(0);
+            transaction.setParentId(Long.parseLong(transaction.getId()));
+            transaction.setKind("capture");
+            transaction.rm("id");
+            JSONObject params = new JSONObject(); params.put("transaction",transaction.getInner());
+
+            JSONObject transactionJs = helper.post(String.format("/orders/%s/transactions.json",shopifyOrderId),params);
+            transaction = new Transaction((JSONObject)transactionJs.get("transaction"));
+            if (!transaction.getStatus().equals("success")){
+                throw new OrderConfirmFailure("Payment failure");
+            }
         }
 
-        response = helper.get(String.format("/orders/%s.json", draftOrder.getOrderId()), new JSONObject());
-
-
-        in.succinct.bpp.shopify.model.Order order = new in.succinct.bpp.shopify.model.Order((JSONObject) response.get("order"));
-        orderMeta.setStatusReachedAt(Status.Accepted,order.getCreatedAt());
-
-        return getBecknOrder(order);
+        return getBecknOrder(shopifyOrder);
     }
 
 
     @Override
     @SuppressWarnings("unchecked")
     public String getTrackingUrl(Order order) {
-        BecknOrderMeta meta = getOrderMeta();
-        if (!ObjectUtil.equals(order.getId(),meta.getBapOrderId())){
-            throw new InvalidOrder();
-        }
-
         JSONObject params = new JSONObject();
         params.put("fields", "tracking_urls");
 
-        JSONObject fulfillmentJson = helper.get(String.format("/orders/%s/fulfillments.json", meta.getECommerceOrderId()), params);
+        JSONObject fulfillmentJson = helper.get(String.format("/orders/%s/fulfillments.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), params);
         Fulfillments fulfillments = new Fulfillments((JSONArray) fulfillmentJson.get("fulfillments"));
         String url = null;
         if (fulfillments.size() > 0 ) {
-            DraftOrder.Fulfillment fulfillment = fulfillments.get(0);
+            ShopifyOrder.Fulfillment fulfillment = fulfillments.get(0);
             BecknStrings urls = fulfillment.getTrackingUrls();
             if (urls.size() >0 ){
                 url = urls.get(0);
@@ -418,34 +406,26 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     @SuppressWarnings("unchecked")
 
     public Order cancel(Order order ) {
-        BecknOrderMeta meta = getOrderMeta();
-        if (!ObjectUtil.equals(meta.getBapOrderId(),order.getId())){
-            throw new InvalidOrder();
-        }
 
         JSONObject params = new JSONObject();
         params.put("reason", "customer");
 
 
-        JSONObject response = helper.post(String.format("/orders/%s/cancel.json", meta.getECommerceOrderId()), params);
+        JSONObject response = helper.post(String.format("/orders/%s/cancel.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), params);
         String error = (String)response.get("error");
         if (!ObjectUtil.isVoid(error)) {
             throw new GenericBusinessError(error);
         }
-        in.succinct.bpp.shopify.model.Order eCommerceOrder = new in.succinct.bpp.shopify.model.Order((JSONObject) response.get("order"));
+        ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
         return getBecknOrder(eCommerceOrder);
     }
 
     @Override
     public Order getStatus(Order order) {
-        BecknOrderMeta meta = getOrderMeta();
-        if (!ObjectUtil.equals(meta.getBapOrderId(),order.getId())){
-            throw new InvalidOrder();
-        }
 
         /* Take status message and fill response with on_status message */
-        JSONObject response = helper.get(String.format("/orders/%s.json", meta.getECommerceOrderId()), new JSONObject());
-        in.succinct.bpp.shopify.model.Order eCommerceOrder = new in.succinct.bpp.shopify.model.Order((JSONObject) response.get("order"));
+        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), new JSONObject());
+        ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
 
         return getBecknOrder(eCommerceOrder);
     }
@@ -791,10 +771,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     //Get Beckn Order
 
-    public Order getBecknOrder(DraftOrder eCommerceOrder) {
-        BecknOrderMeta meta = getOrderMeta(getBecknTransactionId(eCommerceOrder));
-        Order lastReturnedOrderJson = new Order(meta.getOrderJson());
-        String fulfillmentId = "fulfillment/"+ FulfillmentType.home_delivery+"/"+meta.getBecknTransactionId();
+    public Order getBecknOrder(ShopifyOrder eCommerceOrder) {
+        String transactionId = getBecknTransactionId(eCommerceOrder);
+        Order lastReturnedOrderJson = LocalOrderSynchronizer.getInstance().getLastKnownOrder(transactionId);
+        String fulfillmentId = "fulfillment/"+ FulfillmentType.home_delivery+"/"+transactionId;
         Order order = new Order();
         order.setPayment(new Payment());
         if (lastReturnedOrderJson.getPayment() != null) {
@@ -804,18 +784,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         eCommerceOrder.loadMetaFields(helper);
 
 
-        //if (order.getPayment().getStatus() != PaymentStatus.PAID){
+        setPayment(order.getPayment(),eCommerceOrder);
+        order.getPayment().getParams().setTransactionId(transactionId);
 
-            setPayment(order.getPayment(),eCommerceOrder);
-            order.getPayment().getParams().setTransactionId(meta.getBecknTransactionId());
-        //}
-        if (lastReturnedOrderJson.getPayment() != null && lastReturnedOrderJson.getPayment().getBuyerAppFinderFeeAmount() != null ) {
-            order.getPayment().setBuyerAppFinderFeeAmount(lastReturnedOrderJson.getPayment().getBuyerAppFinderFeeAmount());
-            order.getPayment().setBuyerAppFinderFeeType(lastReturnedOrderJson.getPayment().getBuyerAppFinderFeeType());
-        }else {
-            order.getPayment().setBuyerAppFinderFeeAmount(meta.getBuyerAppFinderFeeAmount());
-            order.getPayment().setBuyerAppFinderFeeType(CommissionType.valueOf(meta.getBuyerAppFinderFeeType()));
-        }
         Double feeAmount = order.getPayment().getBuyerAppFinderFeeAmount();
         if (feeAmount != null) {
             if (order.getPayment().getBuyerAppFinderFeeType() == CommissionType.Percent) {
@@ -875,16 +846,15 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             order.getDocuments().add(invoice);
             invoice.setLabel("invoice");
             invoice.setUrl(eCommerceOrder.getInvoiceUrl());
-            meta.setStatusReachedAt(Status.Packed,new Date());
         }
 
         Status orderStatus = eCommerceOrder.getStatus();
-        if (orderStatus == null && eCommerceOrder instanceof in.succinct.bpp.shopify.model.Order) {
+        if (orderStatus == null) {
             if (eCommerceOrder.getCancelledAt() != null) {
                 orderStatus = Status.Cancelled;
             } else if (eCommerceOrder.getCompletedAt() != null) {
                 orderStatus = Status.Completed;
-            } else if (!ObjectUtil.isVoid(eCommerceOrder.getFulfillments().size() > 0)){
+            } else if (eCommerceOrder.getFulfillments().size() > 0){
                 orderStatus = Status.Out_for_delivery;
             } else if (!ObjectUtil.isVoid(eCommerceOrder.getInvoiceUrl())) {
                 orderStatus = Status.Packed;
@@ -893,7 +863,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             }
         }
         order.setState(orderStatus);
-        meta.setStatusReachedAt(orderStatus,new Date());
         order.setItems(new Items());
 
         eCommerceOrder.getLineItems().forEach(lineItem -> {
@@ -910,7 +879,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             order.getItems().add(item);
         });
 
-        DraftOrder.Address shipping = eCommerceOrder.getShippingAddress();
+        ShopifyOrder.Address shipping = eCommerceOrder.getShippingAddress();
         if (ObjectUtil.isVoid(shipping.getAddress1())){
             shipping = eCommerceOrder.getBillingAddress();
         }
@@ -956,14 +925,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         order.setProvider(new Provider());
         order.getProvider().setId(getSubscriber().getAppId());
+        order.getProvider().setDescriptor(new Descriptor());
+        order.getProvider().getDescriptor().setName(getProviderConfig().getStoreName());
 
-        if (!ObjectUtil.isVoid(meta.getBapOrderId())) {
-            order.setId(meta.getBapOrderId());
-        }
+
         order.setCreatedAt(eCommerceOrder.getCreatedAt());
         order.setUpdatedAt(eCommerceOrder.getUpdatedAt());
 
-        meta.save();
 
         return order;
     }
@@ -1016,7 +984,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
 
 
-    private void setPayment(Payment payment, DraftOrder eCommerceOrder) {
+    private void setPayment(Payment payment, ShopifyOrder eCommerceOrder) {
         payment.setSettlementBasis(SettlementBasis.Collection);
 
         if (payment.getCollectedBy() == null){
@@ -1071,7 +1039,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     }
 
-    private void setBilling(Order target, DraftOrder.Address source) {
+    private void setBilling(Order target, ShopifyOrder.Address source) {
         Billing billing = new Billing();
         target.setBilling(billing);
 
