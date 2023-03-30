@@ -350,8 +350,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         JSONObject outOrder = helper.post("/orders.json", dro);
         ShopifyOrder oDraftOrder = new ShopifyOrder((JSONObject) outOrder.get("order"));
-
-
         return getBecknOrder(oDraftOrder);
 
     }
@@ -773,13 +771,27 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     public Order getBecknOrder(ShopifyOrder eCommerceOrder) {
         String transactionId = getBecknTransactionId(eCommerceOrder);
+        LocalOrderSynchronizer.getInstance().setLocalOrderId(transactionId,eCommerceOrder.getId());
         Order lastReturnedOrderJson = LocalOrderSynchronizer.getInstance().getLastKnownOrder(transactionId);
-        String fulfillmentId = "fulfillment/"+ FulfillmentType.home_delivery+"/"+transactionId;
+
+
+
         Order order = new Order();
         order.setPayment(new Payment());
         if (lastReturnedOrderJson.getPayment() != null) {
             order.getPayment().update(lastReturnedOrderJson.getPayment());
         }
+
+        Fulfillment fulfillment = new Fulfillment();
+        order.setFulfillment(fulfillment);
+        if (lastReturnedOrderJson.getFulfillment() != null ){
+            order.getFulfillment().setType(lastReturnedOrderJson.getFulfillment().getType());
+        }
+        if (ObjectUtil.isVoid(order.getFulfillment().getType())) {
+            fulfillment.setType(FulfillmentType.home_delivery);
+        }
+        String fulfillmentId = "fulfillment/"+ fulfillment.getType()+"/"+transactionId;
+        fulfillment.setId(fulfillmentId);
 
         eCommerceOrder.loadMetaFields(helper);
 
@@ -799,10 +811,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                     throw new GenericBusinessError("Max commission percent exceeded");
                 }
             }
-        }else {
-            //Hard coded but should pass from search
-            order.getPayment().setBuyerAppFinderFeeType(CommissionType.Percent);
-            order.getPayment().setBuyerAppFinderFeeAmount(getProviderConfig().getMaxAllowedCommissionPercent());
         }
 
         Quote quote = new Quote();
@@ -849,19 +857,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
 
         Status orderStatus = eCommerceOrder.getStatus();
-        if (orderStatus == null) {
-            if (eCommerceOrder.getCancelledAt() != null) {
-                orderStatus = Status.Cancelled;
-            } else if (eCommerceOrder.getCompletedAt() != null) {
-                orderStatus = Status.Completed;
-            } else if (eCommerceOrder.getFulfillments().size() > 0){
-                orderStatus = Status.Out_for_delivery;
-            } else if (!ObjectUtil.isVoid(eCommerceOrder.getInvoiceUrl())) {
-                orderStatus = Status.Packed;
-            }else {
-                orderStatus = Status.Accepted;
-            }
-        }
         order.setState(orderStatus);
         order.setItems(new Items());
 
@@ -880,7 +875,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         });
 
         ShopifyOrder.Address shipping = eCommerceOrder.getShippingAddress();
-        if (ObjectUtil.isVoid(shipping.getAddress1())){
+        if (shipping == null || ObjectUtil.isVoid(shipping.getAddress1())){
             shipping = eCommerceOrder.getBillingAddress();
         }
 
@@ -888,23 +883,18 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         Location providerLocation = locations.get(lastReturnedOrderJson.getProviderLocation().getId());
         order.setProviderLocation(providerLocation);
 
-        Fulfillment fulfillment = new Fulfillment();
-        order.setFulfillment(fulfillment);
-        fulfillment.setId(fulfillmentId);
+
         fulfillment.setStart(new FulfillmentStop());
         fulfillment.getStart().setLocation(providerLocation);
         fulfillment.setProviderId(String.format("%s/logistics",getSubscriber().getAppId()));
-        fulfillment.setType(FulfillmentType.home_delivery);
 
 
-        fulfillment.setFulfillmentStatus(Fulfillment.getFulfillmentStatus(orderStatus));
+        fulfillment.setFulfillmentStatus(eCommerceOrder.getFulfillmentStatus());
         fulfillment.setEnd(new FulfillmentStop());
         if (lastReturnedOrderJson.getFulfillment().getEnd() != null) {
             fulfillment.getEnd().update(lastReturnedOrderJson.getFulfillment().getEnd());
         }
-        if (fulfillment.getEnd().getLocation() == null) {
-            fulfillment.getEnd().setLocation(new Location());
-        }
+        fulfillment.getEnd().setLocation(new Location());
         if (fulfillment.getEnd().getLocation().getAddress() == null) {
             fulfillment.getEnd().getLocation().setAddress(shipping.getAddress());
         }
@@ -927,6 +917,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         order.getProvider().setId(getSubscriber().getAppId());
         order.getProvider().setDescriptor(new Descriptor());
         order.getProvider().getDescriptor().setName(getProviderConfig().getStoreName());
+        order.getProvider().setCategoryId(getProviderConfig().getCategory().getId());
 
 
         order.setCreatedAt(eCommerceOrder.getCreatedAt());
@@ -947,6 +938,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         item.getDescriptor().setLongDesc(item.getDescriptor().getName());
         item.getDescriptor().setShortDesc(item.getDescriptor().getName());
+
+        in.succinct.bpp.search.db.model.Item dbItem = getItem(item.getId());
+
+        Item itemIndexed  = new Item(dbItem.getObjectJson());
+        item.setTags(itemIndexed.getTags());
+        item.setCategoryId(itemIndexed.getCategoryId());
+        item.setCategoryIds(itemIndexed.getCategoryIds());
 
         ItemQuantity itemQuantity = new ItemQuantity();
         itemQuantity.setAllocated(new Quantity());

@@ -1,6 +1,7 @@
 package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
+import com.venky.core.util.ObjectUtil;
 import com.venky.swf.db.Database;
 import com.venky.swf.plugins.collab.db.model.config.City;
 import com.venky.swf.plugins.collab.db.model.config.Country;
@@ -9,6 +10,7 @@ import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
+import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Tag;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
@@ -294,25 +296,64 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("metafields",metafields);
     }
 
-    static Map<String, Status> fulfillmentStatusMap = new HashMap<>() {{
+    static Map<String, Status> orderStatusMap = new HashMap<>() {{
         put("fulfilled",Status.Completed);
         put("restocked",Status.Cancelled);
-        put("ready_for_pickup",Status.Packed);
+        put("ready_for_pickup",Status.In_progress);
         put("delivered",Status.Completed);
-        put("in_transit",Status.Out_for_delivery);
-        put("out_for_delivery",Status.Out_for_delivery);
-        put("failure",Status.Out_for_delivery);
+        put("in_transit",Status.In_progress);
+        put("out_for_delivery",Status.In_progress);
+        put("failure",Status.In_progress);
 
+    }};
+
+    static Map<String, FulfillmentStatus> fulfillmentStatusMap = new HashMap<>() {{
+        put("fulfilled",FulfillmentStatus.Order_delivered);
+        put("restocked",FulfillmentStatus.Cancelled);
+        put("ready_for_pickup",FulfillmentStatus.Packed);
+        put("delivered",FulfillmentStatus.Order_delivered);
+        put("in_transit",FulfillmentStatus.Order_picked_up);
+        put("out_for_delivery",FulfillmentStatus.Out_for_delivery);
+        put("failure",FulfillmentStatus.Cancelled);
     }};
 
     public Status getStatus(){
         String s =  get("fulfillment_status");
-        Status status = fulfillmentStatusMap.get(s);
+        Status status = orderStatusMap.get(s);
+        if (status == null){
+            if (getFulfillments() != null && getFulfillments().size() > 0){
+                Fulfillment  fulfillment = getFulfillments().get(0);
+                String shipmentStatus = fulfillment.getShipmentStatus();
+                status = orderStatusMap.get(shipmentStatus);
+            }else {
+                if (getCancelledAt() != null) {
+                    status = Status.Cancelled;
+                } else if (getCompletedAt() != null) {
+                    status = Status.Completed;
+                } else if (getFulfillments().size() > 0){
+                    status = Status.In_progress;
+                } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
+                    status = Status.In_progress;
+                }else {
+                    status = Status.Accepted;
+                }
+            }
+        }
+        return status;
+    }
+
+    public FulfillmentStatus getFulfillmentStatus(){
+        String s =  get("fulfillment_status");
+        FulfillmentStatus status = fulfillmentStatusMap.get(s);
         if (status == null){
             if (getFulfillments() != null && getFulfillments().size() > 0){
                 Fulfillment  fulfillment = getFulfillments().get(0);
                 String shipmentStatus = fulfillment.getShipmentStatus();
                 return fulfillmentStatusMap.get(shipmentStatus);
+            }else {
+                if (getInvoiceUrl() != null){
+                    return FulfillmentStatus.Packed;
+                }
             }
         }
         return status;
@@ -344,7 +385,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 JSONObject data = (JSONObject) o.get("data");
                 JSONObject node = (JSONObject) data.get("node");
                 if (node != null) {
-                    setInvoiceUrl((String) o.get("url"));
+                    setInvoiceUrl((String) node.get("url"));
                 }
             }
         }
@@ -714,9 +755,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 if (parts.length > 0) address.setDoor(parts[0]);
                 if (parts.length > 1) {
                     StringBuilder remaining = new StringBuilder();
-                    for (String part : parts) {
+                    for (int i = 1 ; i< parts.length ; i++) {
                         remaining.append(remaining.length() > 0 ? "," : "" );
-                        remaining.append(part);
+                        remaining.append(parts[i]);
                     }
                     address.setBuilding(remaining.toString());
                 }
@@ -726,9 +767,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 if (parts.length > 0) address.setStreet(parts[0]);
                 if (parts.length > 1) {
                     StringBuilder remaining = new StringBuilder();
-                    for (String part : parts) {
+                    for (int i = 1 ; i< parts.length ; i++) {
                         remaining.append(remaining.length() > 0 ? "," : "" );
-                        remaining.append(part);
+                        remaining.append(parts[i]);
                     }
                     address.setLocality(remaining.toString());
                 }

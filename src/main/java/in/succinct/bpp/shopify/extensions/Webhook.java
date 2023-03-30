@@ -6,8 +6,11 @@ import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Extension;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
+import in.succinct.beckn.Cancellation;
 import in.succinct.beckn.Context;
+import in.succinct.beckn.Descriptor;
 import in.succinct.beckn.Message;
+import in.succinct.beckn.Option;
 import in.succinct.beckn.Order;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
@@ -81,6 +84,15 @@ public class Webhook implements Extension {
                     context.set(key,na.getValue());
                 }
             });
+            if (path.parameter().equals("on_cancel")){
+                becknOrder.setCancellation(new Cancellation());
+                becknOrder.getCancellation().setCancelledBy("Seller");
+                becknOrder.getCancellation().setSelectedReason(new Option());
+                becknOrder.getCancellation().getSelectedReason().setDescriptor(new Descriptor());
+                Descriptor descriptor = becknOrder.getCancellation().getSelectedReason().getDescriptor();
+                descriptor.setCode("002");
+                descriptor.setLongDesc("One or more items in the Order not available");
+            }
 
             //Fill any other attributes needed.
             //Send unsolicited on_status.
