@@ -115,8 +115,11 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
 
-    public long getLocationId(){
-        return getLong("location_id");
+    public Long getLocationId(){
+        return get("location_id");
+    }
+    public void setLocationId(Long location_id){
+        set("location_id",location_id);
     }
 
 
@@ -416,6 +419,29 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         }
         public void setPrice(double price){
             set("price",price);
+        }
+        
+        public String getPhone(){
+            return get("phone");
+        }
+        public void setPhone(String phone){
+            set("phone",phone);
+        }
+
+        public String getSource(){
+            return get("source");
+        }
+        public void setSource(String source){
+            set("source",source);
+        }
+
+
+
+        public String getCode(){
+            return get("code");
+        }
+        public void setCode(String code){
+            set("code",code);
         }
     }
     public static class  NoteAttributes extends BecknObjects<Tag> {

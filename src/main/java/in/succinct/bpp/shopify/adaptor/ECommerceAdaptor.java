@@ -171,11 +171,16 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         setBilling( bo.getBilling(),shopifyOrder);
         Bucket totalPrice = new Bucket();
+        shopifyOrder.setLocationId(Long.parseLong(BecknIdHelper.getLocalUniqueId(getProviderConfig().getLocation().getId(),Entity.provider_location)));
 
         if (serviceability != null) {
             ShippingLine shippingLine = new ShippingLine();
             shippingLine.setTitle("Standard");
             shippingLine.setPrice(serviceability.getCharges());
+            shippingLine.setCode("Local Delivery");
+            shippingLine.setCustom(false);
+            shippingLine.setPhone(shopifyOrder.getShippingAddress().getPhone());
+            shippingLine.setSource("shopify");
             shopifyOrder.setShippingLine(shippingLine);
             totalPrice.increment(serviceability.getCharges());
         }
@@ -360,7 +365,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         JSONObject response = helper.get(String.format("/orders/%s.json", shopifyOrderId), new JSONObject());
         ShopifyOrder shopifyOrder = new ShopifyOrder((JSONObject) response.get("order"));
 
-        if (Config.instance().isDevelopmentEnvironment()) {
+        if (Config.instance().isDevelopmentEnvironment() && inOrder.getPayment().getStatus() == PaymentStatus.PAID) {
             JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", shopifyOrderId), new JSONObject());
             Transactions transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
 
