@@ -302,19 +302,17 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
     static Map<String, Status> orderStatusMap = new HashMap<>() {{
-        put("fulfilled",Status.Completed);
         put("restocked",Status.Cancelled);
         put("ready_for_pickup",Status.In_progress);
         put("delivered",Status.Completed);
         put("in_transit",Status.In_progress);
         put("out_for_delivery",Status.In_progress);
         put("failure",Status.In_progress);
+        put("confirmed",Status.In_progress);
 
     }};
 
     static Map<String, FulfillmentStatus> fulfillmentStatusMap = new HashMap<>() {{
-        put("fulfilled",FulfillmentStatus.Order_delivered);
-        put("restocked",FulfillmentStatus.Cancelled);
         put("ready_for_pickup",FulfillmentStatus.Packed);
         put("delivered",FulfillmentStatus.Order_delivered);
         put("in_transit",FulfillmentStatus.Order_picked_up);
@@ -347,7 +345,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             if (status == null){
                 if (getCancelledAt() != null) {
                     status = Status.Cancelled;
-                } else if (getCompletedAt() != null) {
+                } else if ("fulfilled".equals(s) && isDelivered()) {
                     status = Status.Completed;
                 } else if (getFulfillments().size() > 0){
                     status = Status.In_progress;
@@ -385,11 +383,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             if (status == null){
                 if (getCancelledAt() != null) {
                     status = FulfillmentStatus.Cancelled;
-                } else if (isDelivered()) {
-                    status = FulfillmentStatus.Order_delivered;
-                }else if (getCompletedAt() != null){
-                    status = FulfillmentStatus.Order_picked_up;
-                } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
+                } else if ("fulfilled".equals(s)) {
+                    if (isDelivered()) {
+                        status = FulfillmentStatus.Order_delivered;
+                    }else {
+                        status = FulfillmentStatus.Order_picked_up;
+                    }
+                }else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
                     status = FulfillmentStatus.Packed;
                 }else {
                     status = FulfillmentStatus.Pending;
@@ -428,7 +428,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             if (m.getKey().equals("settled")) {
                 setSettled(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
             }else if (m.getKey().equals("invoice_url")){
-                JSONObject o = helper.graphql(String.format("{node(id:\"%s\"){ id ... on GenericFile { url  , alt ,fileStatus} }}",m.getValue()));
+                JSONObject o = helper.graphql(String.format("{node(id:\"%s\"){ id ... on %s { url  , alt ,fileStatus} }}",m.getValue(),m.getValue().split("/")[3]));
                 JSONObject data = (JSONObject) o.get("data");
                 JSONObject node = (JSONObject) data.get("node");
                 if (node != null) {

@@ -885,7 +885,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
 
         Locations locations = getProviderLocations();
-        Location providerLocation = locations.get(lastReturnedOrderJson.getProviderLocation().getId());
+        Location providerLocation = locations.get(BecknIdHelper.getBecknId(StringUtil.valueOf(eCommerceOrder.getLocationId()),getSubscriber(),Entity.provider_location));
         order.setProviderLocation(providerLocation);
 
 
@@ -969,7 +969,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     }
 
-    private boolean isPaid(PaymentTerms terms){
+    private boolean isPaid(ShopifyOrder shopifyOrder){
+        if ("paid".equals(shopifyOrder.getFinancialStatus())){
+            return true;
+        }
+        PaymentTerms terms = shopifyOrder.getPaymentTerms();
+
         if (terms == null){
             return false;
         }
@@ -1013,7 +1018,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         detail.setSettlementPhase(SettlementPhase.SALE_AMOUNT);
         detail.setSettlementCounterparty(SettlementCounterparty.SELLER_APP);
         detail.setSettlementStatus(PaymentStatus.NOT_PAID);
-        boolean paid = isPaid(eCommerceOrder.getPaymentTerms());
+        boolean paid = isPaid(eCommerceOrder);
         boolean isSettled = eCommerceOrder.isSettled();
 
         if (payment.getCollectedBy() == CollectedBy.BPP){
@@ -1027,7 +1032,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }else {
             if (paid){
                 payment.setStatus(PaymentStatus.PAID);
-                detail.setSettlementStatus(PaymentStatus.PAID);
+                detail.setSettlementStatus(isSettled ? PaymentStatus.PAID : PaymentStatus.NOT_PAID);
             }
         }
 
