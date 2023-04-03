@@ -1,6 +1,7 @@
 package in.succinct.bpp.shopify.adaptor;
 
 import com.venky.core.collections.IgnoreCaseMap;
+import com.venky.core.util.Bucket;
 import com.venky.swf.db.Database;
 import com.venky.swf.db.JdbcTypeHelper.TypeConverter;
 import com.venky.swf.db.annotations.column.ui.mimes.MimeType;
@@ -89,6 +90,28 @@ public class ECommerceSDK {
         Call<JSONObject> call =  new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).headers(addnlHeaders)
                 .inputFormat(InputFormat.JSON).input(parameter).method(HttpMethod.POST);
         T object = call.getResponseAsJson();
+        Bucket tries = new Bucket(3);
+        while (call.getStatus() > 200 && call.getStatus() < 299 && tries.intValue() > 0){
+            List<String> locations = call.getResponseHeaders().get("location");
+            if (locations.isEmpty()){
+                break;
+            }
+            String location = locations.get(0);
+            List<String> after = call.getResponseHeaders().get("retry-after");
+            if (after == null || after.isEmpty()){
+                break;
+            }
+            long millis = Long.parseLong(after.get(0)) * 1000  + 500 ;
+            try {
+                Thread.sleep(millis);
+            }catch (Exception ex){
+                //
+            }
+            call = new Call<JSONObject>().url(String.format("%s.json" ,location)).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).
+                    inputFormat(InputFormat.FORM_FIELDS).input(new JSONObject()).method(HttpMethod.GET);
+            object  = call.getResponseAsJson();
+            tries.decrement();
+        }
         if (call.hasErrors()){
             object = (T)JSONValue.parse(new InputStreamReader(call.getErrorStream()));
         }
@@ -112,7 +135,8 @@ public class ECommerceSDK {
         return get(relativeUrl,parameter,new IgnoreCaseMap<>());
     }
     public <T extends JSONAware> T get(String relativeUrl, JSONObject parameter, Map<String,String> addnlHeaders){
-        Call<JSONObject> call = new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).headers(addnlHeaders)
+        Call<JSONObject> call = new Call<JSONObject>().url(getAdminApiUrl(),relativeUrl).header("content-type", MimeType.APPLICATION_JSON.toString()).header("X-Shopify-Access-Token",getAccessToken()).
+                headers(addnlHeaders)
                 .input(parameter)
                 .method(HttpMethod.GET);
         T o = call.getResponseAsJson();

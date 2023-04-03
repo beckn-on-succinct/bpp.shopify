@@ -21,7 +21,9 @@ import org.json.simple.JSONObject;
 
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public class ShopifyOrder extends ShopifyObjectWithId {
     public ShopifyOrder(){
@@ -318,17 +320,31 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         put("in_transit",FulfillmentStatus.Order_picked_up);
         put("out_for_delivery",FulfillmentStatus.Out_for_delivery);
         put("failure",FulfillmentStatus.Cancelled);
+        put("confirmed",FulfillmentStatus.Packed);
     }};
 
     public Status getStatus(){
         String s =  get("fulfillment_status");
-        Status status = orderStatusMap.get(s);
+        Status status = s == null ? null : orderStatusMap.get(s);
+        Set<String> statuses = new HashSet<>(){{
+            add("pending");
+            add("open");
+            add("success");
+        }};
+
         if (status == null){
             if (getFulfillments() != null && getFulfillments().size() > 0){
-                Fulfillment  fulfillment = getFulfillments().get(0);
-                String shipmentStatus = fulfillment.getShipmentStatus();
-                status = orderStatusMap.get(shipmentStatus);
-            }else {
+                for (Fulfillment fulfillment : getFulfillments()){
+                    String shipmentStatus = fulfillment.getShipmentStatus();
+                    String fulfilmentStatus = fulfillment.getStatus();
+                    if (!statuses.contains(fulfilmentStatus)){
+                        continue;
+                    }
+                    status = orderStatusMap.get(shipmentStatus);
+                    break;
+                }
+            }
+            if (status == null){
                 if (getCancelledAt() != null) {
                     status = Status.Cancelled;
                 } else if (getCompletedAt() != null) {
@@ -347,15 +363,36 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
     public FulfillmentStatus getFulfillmentStatus(){
         String s =  get("fulfillment_status");
-        FulfillmentStatus status = fulfillmentStatusMap.get(s);
+        FulfillmentStatus status = s == null ? null : fulfillmentStatusMap.get(s);
         if (status == null){
+            Set<String> statuses = new HashSet<>(){{
+                add("pending");
+                add("open");
+                add("success");
+            }};
+
             if (getFulfillments() != null && getFulfillments().size() > 0){
-                Fulfillment  fulfillment = getFulfillments().get(0);
-                String shipmentStatus = fulfillment.getShipmentStatus();
-                return fulfillmentStatusMap.get(shipmentStatus);
-            }else {
-                if (getInvoiceUrl() != null){
-                    return FulfillmentStatus.Packed;
+                for (Fulfillment fulfillment : getFulfillments()){
+                    String shipmentStatus = fulfillment.getShipmentStatus();
+                    String fulfilmentStatus = fulfillment.getStatus();
+                    if (!statuses.contains(fulfilmentStatus)){
+                        continue;
+                    }
+                    status = fulfillmentStatusMap.get(shipmentStatus);
+                    break;
+                }
+            }
+            if (status == null){
+                if (getCancelledAt() != null) {
+                    status = FulfillmentStatus.Cancelled;
+                } else if (isDelivered()) {
+                    status = FulfillmentStatus.Order_delivered;
+                }else if (getCompletedAt() != null){
+                    status = FulfillmentStatus.Order_picked_up;
+                } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
+                    status = FulfillmentStatus.Packed;
+                }else {
+                    status = FulfillmentStatus.Pending;
                 }
             }
         }
@@ -367,6 +404,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
     public void setSettled(boolean settled){
         set("settled",settled);
+    }
+
+    public boolean isDelivered(){
+        return getBoolean("delivered");
+    }
+    public void setDelivered(boolean delivered){
+        set("delivered",delivered);
     }
 
     public void loadMetaFields(ECommerceSDK helper) {
@@ -390,6 +434,8 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 if (node != null) {
                     setInvoiceUrl((String) node.get("url"));
                 }
+            }else if (m.getKey().equals("delivered")){
+                setDelivered(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
             }
         }
 
