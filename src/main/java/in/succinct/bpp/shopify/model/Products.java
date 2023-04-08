@@ -1,8 +1,6 @@
 package in.succinct.bpp.shopify.model;
 
 import com.venky.core.string.StringUtil;
-import com.venky.swf.db.Database;
-import com.venky.swf.db.JdbcTypeHelper;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
@@ -11,7 +9,6 @@ import in.succinct.bpp.shopify.model.Products.Product;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
-import java.sql.JDBCType;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Objects;
@@ -82,7 +79,7 @@ public class Products extends BecknObjectsWithId<Product> {
         }
 
         Set<String> tagSet = null;
-        private void loadTagSet(){
+        public Set<String> getTagSet(){
             if (tagSet == null){
                 tagSet = new HashSet<>();
                 String tags = getTags();
@@ -93,13 +90,13 @@ public class Products extends BecknObjectsWithId<Product> {
                     }
                 }
             }
+            return tagSet;
         }
 
         public boolean isVeg(){
             Boolean value = get("veg");
             if (value == null){
-                loadTagSet();
-                value = tagSet.contains("veg");
+                value = getTagSet().contains("veg");
                 set("veg",value);
             }
             return value;

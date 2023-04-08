@@ -413,6 +413,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("delivered",delivered);
     }
 
+    public String getTrackingUrl(){
+        return get("tracking_url");
+    }
+    public void setTrackingUrl(String tracking_url){
+        set("tracking_url",tracking_url);
+    }
+
     public void loadMetaFields(ECommerceSDK helper) {
         Metafields metafields = getMetafields();
         if (metafields != null){
@@ -436,6 +443,8 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 }
             }else if (m.getKey().equals("delivered")){
                 setDelivered(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
+            }else if (m.getKey().equals("tracking_url")){
+                setTrackingUrl(m.getValue());
             }
         }
 

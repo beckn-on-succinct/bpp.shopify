@@ -30,6 +30,7 @@ import in.succinct.beckn.Descriptor;
 import in.succinct.beckn.Document;
 import in.succinct.beckn.Documents;
 import in.succinct.beckn.Fulfillment;
+import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Fulfillment.FulfillmentType;
 import in.succinct.beckn.FulfillmentStop;
 import in.succinct.beckn.Images;
@@ -67,6 +68,8 @@ import in.succinct.beckn.Tag;
 import in.succinct.beckn.Tags;
 import in.succinct.beckn.User;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
+import in.succinct.bpp.core.adaptor.FulfillmentStatusAdaptor;
+import in.succinct.bpp.core.adaptor.FulfillmentStatusAdaptor.FulfillmentStatusAudit;
 import in.succinct.bpp.core.adaptor.TimeSensitiveCache;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper.Entity;
@@ -389,20 +392,37 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     @Override
     @SuppressWarnings("unchecked")
     public String getTrackingUrl(Order order) {
-        JSONObject params = new JSONObject();
-        params.put("fields", "tracking_urls");
-
-        JSONObject fulfillmentJson = helper.get(String.format("/orders/%s/fulfillments.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), params);
-        Fulfillments fulfillments = new Fulfillments((JSONArray) fulfillmentJson.get("fulfillments"));
-        String url = null;
-        if (fulfillments.size() > 0 ) {
-            ShopifyOrder.Fulfillment fulfillment = fulfillments.get(0);
-            BecknStrings urls = fulfillment.getTrackingUrls();
-            if (urls.size() >0 ){
-                url = urls.get(0);
-            }
+        String trackUrl = LocalOrderSynchronizer.getInstance().getTrackingUrl(order);
+        if (trackUrl != null){
+            return trackUrl;
         }
-        return url;
+
+        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), new JSONObject());
+        ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
+        if (getFulfillmentStatusAdaptor() != null){
+            trackUrl = getFulfillmentStatusAdaptor().getTrackingUrl(StringUtil.valueOf(eCommerceOrder.getOrderNumber()));
+        }else if (eCommerceOrder.getTrackingUrl() != null) {
+            trackUrl = eCommerceOrder.getTrackingUrl();
+        }/*else {
+            JSONObject params = new JSONObject();
+            params.put("fields", "tracking_urls");
+
+            JSONObject fulfillmentJson = helper.get(String.format("/orders/%s/fulfillments.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), params);
+            Fulfillments fulfillments = new Fulfillments((JSONArray) fulfillmentJson.get("fulfillments"));
+            String url = null;
+            if (fulfillments.size() > 0) {
+                ShopifyOrder.Fulfillment fulfillment = fulfillments.get(0);
+                BecknStrings urls = fulfillment.getTrackingUrls();
+                if (urls.size() > 0) {
+                    url = urls.get(0);
+                }
+            }
+            trackUrl = url;
+        }*/
+        if (trackUrl != null){
+           LocalOrderSynchronizer.getInstance().setTrackingUrl(getBecknTransactionId(eCommerceOrder),trackUrl);
+        }
+        return trackUrl;
     }
 
     @Override
@@ -517,6 +537,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             Map<String, Double> taxRateMap = getTaxRateMap();
 
             for (Product product : products) {
+                if (!product.getTagSet().contains("ondc")){
+                    continue;
+                }
                 for (ProductVariant variant : product.getProductVariants()) {
                     InventoryItem inventoryItem = inventoryItems.get(StringUtil.valueOf(variant.getInventoryItemId()));
                     if (inventoryItem == null){
@@ -565,9 +588,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                         item.setCategoryIds(new BecknStrings());
                         item.getCategoryIds().add(item.getCategoryId());
                         item.setTags(new Tags());
-                        StringTokenizer tokenizer = new StringTokenizer(product.getTags(), ",");
-                        while (tokenizer.hasMoreTokens()) {
-                            item.getTags().set(tokenizer.nextToken().trim(), "true");
+
+                        for (String tag: product.getTagSet()) {
+                            item.getTags().set(tag, "true");
                         }
                         item.getTags().set("hsn_code", inventoryItem.getHarmonizedSystemCode());
                         item.getTags().set("country_of_origin", inventoryItem.getCountryCodeOfOrigin());
@@ -773,6 +796,23 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
 
     //Get Beckn Order
+
+    public List<FulfillmentStatusAudit> getStatusAudit (Order order) {
+        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), new JSONObject());
+        ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
+        FulfillmentStatusAdaptor adaptor = getFulfillmentStatusAdaptor() ;
+        String transactionId = getBecknTransactionId(eCommerceOrder);
+
+        if (adaptor != null){
+            List<FulfillmentStatusAudit> audits = adaptor.getStatusAudit(String.valueOf(eCommerceOrder.getOrderNumber()));
+            for (Iterator<FulfillmentStatusAudit> i = audits.iterator(); i.hasNext() ; ){
+                FulfillmentStatusAudit audit = i.next();
+                LocalOrderSynchronizer.getInstance().setFulfillmentStatusReachedAt(transactionId,audit.getFulfillmentStatus(),audit.getDate(),!i.hasNext());
+            }
+        }
+        return LocalOrderSynchronizer.getInstance().getFulfillmentStatusAudit(transactionId);
+
+    }
 
     public Order getBecknOrder(ShopifyOrder eCommerceOrder) {
         String transactionId = getBecknTransactionId(eCommerceOrder);
