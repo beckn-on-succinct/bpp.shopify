@@ -490,7 +490,12 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("source",source);
         }
 
-
+        public TaxLines getTaxLines(){
+            return get(TaxLines.class, "tax_lines");
+        }
+        public void setTaxLines(TaxLines tax_lines){
+            set("tax_lines",tax_lines);
+        }
 
         public String getCode(){
             return get("code");
@@ -617,7 +622,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
     }
 
-    public static class TaxLine extends ShopifyObjectWithId{
+    public static class TaxLine extends BecknObject{
         public double getPrice(){
             return getDouble("price");
         }
@@ -631,10 +636,10 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         public void setRate(double rate){
             set("rate",rate);
         }
-        public double getTitle(){
-            return getDouble("title");
+        public String getTitle(){
+            return get("title");
         }
-        public void setTitle(double title){
+        public void setTitle(String title){
             set("title",title);
         }
 
@@ -731,7 +736,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
 
     }
-    public static class TaxLines extends BecknObjectsWithId<TaxLine>{
+    public static class TaxLines extends BecknObjects<TaxLine>{
 
     }
     public static class LineItems extends BecknObjects<LineItem>{

@@ -30,7 +30,6 @@ import in.succinct.beckn.Descriptor;
 import in.succinct.beckn.Document;
 import in.succinct.beckn.Documents;
 import in.succinct.beckn.Fulfillment;
-import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Fulfillment.FulfillmentType;
 import in.succinct.beckn.FulfillmentStop;
 import in.succinct.beckn.Images;
@@ -57,6 +56,7 @@ import in.succinct.beckn.Provider;
 import in.succinct.beckn.Quantity;
 import in.succinct.beckn.Quote;
 import in.succinct.beckn.Request;
+import in.succinct.beckn.SellerException.CancellationNotPossible;
 import in.succinct.beckn.SellerException.GenericBusinessError;
 import in.succinct.beckn.SellerException.OrderConfirmFailure;
 import in.succinct.beckn.SettlementDetail;
@@ -73,8 +73,9 @@ import in.succinct.bpp.core.adaptor.FulfillmentStatusAdaptor.FulfillmentStatusAu
 import in.succinct.bpp.core.adaptor.TimeSensitiveCache;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper.Entity;
-import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
+import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.core.db.model.ProviderConfig.Serviceability;
+import in.succinct.bpp.search.adaptor.SearchAdaptor;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK.Page;
 import in.succinct.bpp.shopify.model.ProductImages;
 import in.succinct.bpp.shopify.model.ProductImages.ProductImage;
@@ -86,7 +87,6 @@ import in.succinct.bpp.shopify.model.Products.InventoryLevels;
 import in.succinct.bpp.shopify.model.Products.Product;
 import in.succinct.bpp.shopify.model.Products.ProductVariant;
 import in.succinct.bpp.shopify.model.ShopifyOrder;
-import in.succinct.bpp.shopify.model.ShopifyOrder.Fulfillments;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItem;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItems;
 import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
@@ -94,6 +94,8 @@ import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedule;
 import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedules;
 import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentTerms;
 import in.succinct.bpp.shopify.model.ShopifyOrder.ShippingLine;
+import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLine;
+import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLines;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Transaction;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Transactions;
 import in.succinct.bpp.shopify.model.Store;
@@ -104,15 +106,20 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.StringTokenizer;
 
-public class ECommerceAdaptor extends CommerceAdaptor {
+public class ECommerceAdaptor extends SearchAdaptor {
     final ECommerceSDK helper;
     final TimeSensitiveCache cache = new TimeSensitiveCache(Duration.ofDays(1));
+
+    @Override
+    public void clearCache(){
+        cache.clear();
+    }
 
     public ECommerceAdaptor(Map<String, String> configuration, Subscriber subscriber) {
         super(configuration, subscriber);
@@ -145,7 +152,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             throw serviceability.getReason();
         }
 
-        shopifyOrder.setId(LocalOrderSynchronizer.getInstance().getLocalOrderId(request.getContext().getTransactionId()));
+        shopifyOrder.setId(LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(request.getContext().getTransactionId()));
 
         shopifyOrder.setCurrency("INR");
         shopifyOrder.setSourceName("beckn");
@@ -174,6 +181,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         setBilling( bo.getBilling(),shopifyOrder);
         Bucket totalPrice = new Bucket();
+        Bucket tax = new Bucket();
         shopifyOrder.setLocationId(Long.parseLong(BecknIdHelper.getLocalUniqueId(getProviderConfig().getLocation().getId(),Entity.provider_location)));
 
         if (serviceability != null) {
@@ -181,13 +189,30 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             shippingLine.setTitle("Standard");
             shippingLine.setPrice(serviceability.getCharges());
             shippingLine.setCode("Local Delivery");
-            shippingLine.setCustom(false);
             shippingLine.setPhone(shopifyOrder.getShippingAddress().getPhone());
             shippingLine.setSource("shopify");
+            shippingLine.setTaxLines(new TaxLines());
+
+            TaxLine taxLine = new TaxLine();
+            taxLine.setRate(0.18);
+            taxLine.setTitle("IGST");
+
+            double factor = isTaxIncludedInPrice() ? (taxLine.getRate()/(1 + taxLine.getRate())) : taxLine.getRate();
+            double taxIncluded = serviceability.getCharges() * factor;
+
+
+            taxLine.setPrice(taxIncluded);
+
+
+            shippingLine.getTaxLines().add(taxLine);
+
             shopifyOrder.setShippingLine(shippingLine);
+
             totalPrice.increment(serviceability.getCharges());
+            tax.increment(taxIncluded);
         }
 
+        shopifyOrder.setTaxesIncluded(isTaxIncludedInPrice());
 
         if (bo.getItems() != null) {
             bo.getItems().forEach(boItem -> {
@@ -198,14 +223,28 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 Item refreshedBoItem = new Item(dbItem.getObjectJson());
                 JSONObject inspectQuantity = (JSONObject) boItem.getInner().get("quantity");
                 if (inspectQuantity.containsKey("count")){
-                    refreshedBoItem.setQuantity(boItem.getQuantity());
+                        refreshedBoItem.setQuantity(boItem.getQuantity());
                 }else {
                     refreshedBoItem.setItemQuantity(boItem.getItemQuantity());
                 }
                 LineItem lineItem = addItem(shopifyOrder, refreshedBoItem);
-                totalPrice.increment(refreshedBoItem.getPrice().getValue() * lineItem.getQuantity());
+                lineItem.setTaxLines(new TaxLines());
+
+                double linePrice = refreshedBoItem.getPrice().getValue() * lineItem.getQuantity();
+                double taxRate = doubleTypeConverter.valueOf(refreshedBoItem.getTags().get("tax_rate"))/100.0;
+                double lineTax = linePrice * (isTaxIncludedInPrice() ? taxRate/(1.0+taxRate) : taxRate);
+                totalPrice.increment(linePrice);
+                tax.increment(lineTax);
+
+                TaxLine taxLine = new TaxLine();
+                taxLine.setPrice(lineTax);
+                taxLine.setRate(taxRate);
+                taxLine.setTitle("IGST");
+                lineItem.getTaxLines().add(taxLine);
+
             });
         }
+        shopifyOrder.setTotalTax(tax.doubleValue());
 
         if (Config.instance().isDevelopmentEnvironment()){
             shopifyOrder.setTest(true);
@@ -364,7 +403,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
     @Override
     public Order confirmDraftOrder(Order inOrder) {
-        String shopifyOrderId = LocalOrderSynchronizer.getInstance().getLocalOrderId(inOrder);
+        String shopifyOrderId = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(inOrder);
         JSONObject response = helper.get(String.format("/orders/%s.json", shopifyOrderId), new JSONObject());
         ShopifyOrder shopifyOrder = new ShopifyOrder((JSONObject) response.get("order"));
 
@@ -392,13 +431,14 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     @Override
     @SuppressWarnings("unchecked")
     public String getTrackingUrl(Order order) {
-        String trackUrl = LocalOrderSynchronizer.getInstance().getTrackingUrl(order);
+        String trackUrl = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getTrackingUrl(order);
         if (trackUrl != null){
             return trackUrl;
         }
 
-        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), new JSONObject());
+        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), new JSONObject());
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
+        eCommerceOrder.loadMetaFields(helper);
         if (getFulfillmentStatusAdaptor() != null){
             trackUrl = getFulfillmentStatusAdaptor().getTrackingUrl(StringUtil.valueOf(eCommerceOrder.getOrderNumber()));
         }else if (eCommerceOrder.getTrackingUrl() != null) {
@@ -420,7 +460,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             trackUrl = url;
         }*/
         if (trackUrl != null){
-           LocalOrderSynchronizer.getInstance().setTrackingUrl(getBecknTransactionId(eCommerceOrder),trackUrl);
+            LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).setTrackingUrl(getBecknTransactionId(eCommerceOrder),trackUrl);
         }
         return trackUrl;
     }
@@ -434,10 +474,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         params.put("reason", "customer");
 
 
-        JSONObject response = helper.post(String.format("/orders/%s/cancel.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), params);
+        JSONObject response = helper.post(String.format("/orders/%s/cancel.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), params);
         String error = (String)response.get("error");
         if (!ObjectUtil.isVoid(error)) {
-            throw new GenericBusinessError(error);
+            throw new CancellationNotPossible(error);
         }
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
         return getBecknOrder(eCommerceOrder);
@@ -447,7 +487,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     public Order getStatus(Order order) {
 
         /* Take status message and fill response with on_status message */
-        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), new JSONObject());
+        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), new JSONObject());
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
 
         return getBecknOrder(eCommerceOrder);
@@ -517,7 +557,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             Items items = new Items();
             Store store = getStore();
 
+
             InventoryLevels levels = getInventoryLevels();
+
+            Set<String> publishedProducts = getPublishedProducts();
             Cache<Long, List<Long>> inventoryLocations = new Cache<>(0, 0) {
                 @Override
                 protected List<Long> getValue(Long aLong) {
@@ -537,9 +580,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             Map<String, Double> taxRateMap = getTaxRateMap();
 
             for (Product product : products) {
-                if (!product.getTagSet().contains("ondc")){
+                if (!publishedProducts.contains(product.getId())) {
                     continue;
                 }
+
                 for (ProductVariant variant : product.getProductVariants()) {
                     InventoryItem inventoryItem = inventoryItems.get(StringUtil.valueOf(variant.getInventoryItemId()));
                     if (inventoryItem == null){
@@ -564,7 +608,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                         if (ObjectUtil.equals(variant.getTitle(),"Default Title")){
                             descriptor.setName(product.getTitle());
                         }else {
-                            descriptor.setName(variant.getTitle());
+                            descriptor.setName(String.format("%s - ( %s )" ,product.getTitle(),variant.getTitle()));
                         }
 
                         descriptor.setShortDesc(descriptor.getName());
@@ -675,14 +719,42 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             @Override
             protected Double getValue(String taxClass) {
                 if (!ObjectUtil.isVoid(taxClass)){
-                    AssetCode assetCode = AssetCode.find(taxClass);
-                    return assetCode.getGstPct();
+                    AssetCode assetCode = AssetCode.findLike(taxClass,AssetCode.class);
+                    if (assetCode != null) {
+                        return assetCode.getReflector().getJdbcTypeHelper().getTypeRef(double.class).getTypeConverter().valueOf(assetCode.getGstPct());
+                    }
                 }
                 return 0.0D;
             }
         };
     }
 
+    private Set<String> getPublishedProducts(){
+        return cache.get(PublishedProducts.class,()->{
+            JSONObject input = new JSONObject();
+            input.put("limit", 1000);
+
+
+            PublishedProducts ids = new PublishedProducts();
+
+            Page<JSONObject> productsPage = new Page<>();
+            productsPage.next = "/product_listings/product_ids.json";
+            while (productsPage.next != null) {
+                productsPage = helper.getPage(productsPage.next, input);
+                if (productsPage.data == null){
+                    break;
+                }
+
+                JSONArray productIds = ((JSONArray)productsPage.data.get("product_ids"));
+                for (Object id : productIds){
+                    ids.add(id.toString());
+                }
+            }
+            return ids;
+        });
+    }
+
+    public static class PublishedProducts extends HashSet<String> {}
 
     @SuppressWarnings("unchecked")
     private InventoryLevels getInventoryLevels() {
@@ -798,7 +870,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     //Get Beckn Order
 
     public List<FulfillmentStatusAudit> getStatusAudit (Order order) {
-        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizer.getInstance().getLocalOrderId(order)), new JSONObject());
+        JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), new JSONObject());
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
         FulfillmentStatusAdaptor adaptor = getFulfillmentStatusAdaptor() ;
         String transactionId = getBecknTransactionId(eCommerceOrder);
@@ -807,17 +879,17 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             List<FulfillmentStatusAudit> audits = adaptor.getStatusAudit(String.valueOf(eCommerceOrder.getOrderNumber()));
             for (Iterator<FulfillmentStatusAudit> i = audits.iterator(); i.hasNext() ; ){
                 FulfillmentStatusAudit audit = i.next();
-                LocalOrderSynchronizer.getInstance().setFulfillmentStatusReachedAt(transactionId,audit.getFulfillmentStatus(),audit.getDate(),!i.hasNext());
+                LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).setFulfillmentStatusReachedAt(transactionId,audit.getFulfillmentStatus(),audit.getDate(),!i.hasNext());
             }
         }
-        return LocalOrderSynchronizer.getInstance().getFulfillmentStatusAudit(transactionId);
+        return LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getFulfillmentStatusAudit(transactionId);
 
     }
 
     public Order getBecknOrder(ShopifyOrder eCommerceOrder) {
         String transactionId = getBecknTransactionId(eCommerceOrder);
-        LocalOrderSynchronizer.getInstance().setLocalOrderId(transactionId,eCommerceOrder.getId());
-        Order lastReturnedOrderJson = LocalOrderSynchronizer.getInstance().getLastKnownOrder(transactionId);
+        LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).setLocalOrderId(transactionId,eCommerceOrder.getId());
+        Order lastReturnedOrderJson = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLastKnownOrder(transactionId);
 
 
 
@@ -879,7 +951,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
         BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.tax,"Tax",tax);
         element.setItemId(fulfillmentId);
-        quote.getBreakUp().add(element);
+        if (!isTaxIncludedInPrice()) {
+            quote.getBreakUp().add(element);
+        }
 
         if (shippingPrice.getValue() > 0) {
             element = quote.getBreakUp().createElement(BreakUpCategory.delivery, "Delivery Charges", shippingPrice);
@@ -990,6 +1064,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         item.setTags(itemIndexed.getTags());
         item.setCategoryId(itemIndexed.getCategoryId());
         item.setCategoryIds(itemIndexed.getCategoryIds());
+        item.setCancellable(itemIndexed.isCancellable());
 
         ItemQuantity itemQuantity = new ItemQuantity();
         itemQuantity.setAllocated(new Quantity());

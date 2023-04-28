@@ -15,7 +15,6 @@ import in.succinct.beckn.Order;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
-import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 import in.succinct.bpp.shopify.model.ShopifyOrder;
 import org.json.simple.JSONObject;
