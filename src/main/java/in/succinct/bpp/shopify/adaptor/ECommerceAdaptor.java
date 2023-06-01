@@ -693,7 +693,10 @@ public class ECommerceAdaptor extends SearchAdaptor {
                         if (item.isReturnable()){
                             item.setReturnWindow(getProviderConfig().getReturnWindow());
                             item.setSellerPickupReturn(getProviderConfig().isReturnPickupSupported());
+                        }else {
+                            item.setReturnWindow(Duration.ofDays(0));
                         }
+
                         item.setCancellable(true);
                         item.setTimeToShip(getProviderConfig().getTurnAroundTime());
                         item.setAvailableOnCod(getProviderConfig().isCodSupported());
