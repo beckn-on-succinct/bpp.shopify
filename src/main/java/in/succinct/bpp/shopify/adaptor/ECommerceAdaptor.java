@@ -46,6 +46,7 @@ import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Payment;
 import in.succinct.beckn.Payment.CollectedBy;
 import in.succinct.beckn.Payment.CommissionType;
+import in.succinct.beckn.Payment.NegotiationStatus;
 import in.succinct.beckn.Payment.Params;
 import in.succinct.beckn.Payment.PaymentStatus;
 import in.succinct.beckn.Payment.PaymentType;
@@ -62,17 +63,17 @@ import in.succinct.beckn.SellerException.OrderConfirmFailure;
 import in.succinct.beckn.SettlementDetail;
 import in.succinct.beckn.SettlementDetail.SettlementCounterparty;
 import in.succinct.beckn.SettlementDetail.SettlementPhase;
+
 import in.succinct.beckn.SettlementDetail.SettlementType;
 import in.succinct.beckn.SettlementDetails;
 import in.succinct.beckn.Tag;
 import in.succinct.beckn.Tags;
 import in.succinct.beckn.User;
-import in.succinct.bpp.core.adaptor.CommerceAdaptor;
-import in.succinct.bpp.core.adaptor.FulfillmentStatusAdaptor;
-import in.succinct.bpp.core.adaptor.FulfillmentStatusAdaptor.FulfillmentStatusAudit;
 import in.succinct.bpp.core.adaptor.TimeSensitiveCache;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper.Entity;
+import in.succinct.bpp.core.adaptor.fulfillment.FulfillmentStatusAdaptor;
+import in.succinct.bpp.core.adaptor.fulfillment.FulfillmentStatusAdaptor.FulfillmentStatusAudit;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.core.db.model.ProviderConfig.Serviceability;
 import in.succinct.bpp.search.adaptor.SearchAdaptor;
@@ -236,11 +237,19 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 totalPrice.increment(linePrice);
                 tax.increment(lineTax);
 
-                TaxLine taxLine = new TaxLine();
-                taxLine.setPrice(lineTax);
-                taxLine.setRate(taxRate);
-                taxLine.setTitle("IGST");
-                lineItem.getTaxLines().add(taxLine);
+                String[] taxHeads = new String[] {"IGST"};
+                if (ObjectUtil.equals(getProviderConfig().getLocation().getAddress().getState(), shopifyOrder.getShippingAddress().getAddress().getState())){
+                    taxHeads = new String[] { "SGST","CGST"};
+                }
+                int numHeads = taxHeads.length;
+                for (String head : taxHeads ){
+                    TaxLine taxLine = new TaxLine();
+                    taxLine.setPrice(lineTax/numHeads);
+                    taxLine.setRate(taxRate/numHeads);
+                    taxLine.setTitle(head);
+                    lineItem.getTaxLines().add(taxLine);
+
+                }
 
             });
         }
@@ -897,16 +906,16 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
 
         Order order = new Order();
-        order.setPayment(new Payment());
-        if (lastReturnedOrderJson.getPayment() != null) {
-            order.getPayment().update(lastReturnedOrderJson.getPayment());
+        order.update(lastReturnedOrderJson);
+        if (order.getPayment() == null){
+            order.setPayment(new Payment());
         }
 
-        Fulfillment fulfillment = new Fulfillment();
-        order.setFulfillment(fulfillment);
-        if (lastReturnedOrderJson.getFulfillment() != null ){
-            order.getFulfillment().setType(lastReturnedOrderJson.getFulfillment().getType());
+        if (order.getFulfillment() == null){
+            order.setFulfillment(new Fulfillment());
         }
+        Fulfillment fulfillment = order.getFulfillment();
+
         if (ObjectUtil.isVoid(order.getFulfillment().getType())) {
             fulfillment.setType(FulfillmentType.home_delivery);
         }
@@ -917,7 +926,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
 
         setPayment(order.getPayment(),eCommerceOrder);
-        order.getPayment().getParams().setTransactionId(transactionId);
+        //order.getPayment().getParams().setTransactionId(transactionId); different transaction id.s
 
         Double feeAmount = order.getPayment().getBuyerAppFinderFeeAmount();
         if (feeAmount != null) {
@@ -941,8 +950,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
         quote.getPrice().setCurrency(order.getPayment().getParams().getCurrency());
 
         quote.setBreakUp(new BreakUp());
-
-
         Price productPrice = new Price(); productPrice.setValue(eCommerceOrder.getSubtotalPrice()); productPrice.setCurrency("INR");
         Price tax = new Price(); tax.setValue(eCommerceOrder.getTotalTax()); tax.setCurrency("INR");
         Price total = new Price(); total.setValue(eCommerceOrder.getTotalPrice());total.setCurrency("INR");
@@ -1121,39 +1128,17 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 payment.setCollectedBy(CollectedBy.BAP);
                 payment.setType(PaymentType.ON_ORDER);
             }
-        }else if (payment.getCollectedBy() == CollectedBy.BPP){
+        }else if (payment.getCollectedBy() == CollectedBy.BPP  && getProviderConfig().isCodSupported()){
             payment.setType(PaymentType.POST_FULFILLMENT);
         }else{
             payment.setCollectedBy(CollectedBy.BAP);
             payment.setType(PaymentType.ON_ORDER);
         }
-
-        payment.setSettlementDetails(new SettlementDetails());
-        SettlementDetail detail = new SettlementDetail();
-        payment.getSettlementDetails().add(detail);
-        detail.setUpiAddress(getProviderConfig().getVPA());
-        detail.setSettlementType(SettlementType.UPI);
-        detail.setSettlementPhase(SettlementPhase.SALE_AMOUNT);
-        detail.setSettlementCounterparty(SettlementCounterparty.SELLER_APP);
-        detail.setSettlementStatus(PaymentStatus.NOT_PAID);
-        boolean paid = isPaid(eCommerceOrder);
-        boolean isSettled = eCommerceOrder.isSettled();
-
-        if (payment.getCollectedBy() == CollectedBy.BPP){
-            if (paid) {
-                payment.setStatus(PaymentStatus.PAID);
-                detail.setSettlementStatus(isSettled ? PaymentStatus.PAID : PaymentStatus.NOT_PAID);
-            }else {
-                payment.setStatus(PaymentStatus.NOT_PAID);
-                detail.setSettlementStatus(PaymentStatus.NOT_PAID);
-            }
-        }else {
-            if (paid){
-                payment.setStatus(PaymentStatus.PAID);
-                detail.setSettlementStatus(isSettled ? PaymentStatus.PAID : PaymentStatus.NOT_PAID);
-            }
-        }
-
+        payment.setCollectedByStatus(NegotiationStatus.Assert);
+        payment.setCollectedByStatus(NegotiationStatus.Agree);
+        payment.setSettlementBasisStatus(NegotiationStatus.Agree);
+        payment.setReturnWindow(getProviderConfig().getReturnWindow());
+        payment.setReturnWindowStatus(NegotiationStatus.Assert);
 
         payment.setParams(new Params());
         payment.getParams().setCurrency(getStore().getCurrency());
@@ -1161,6 +1146,44 @@ public class ECommerceAdaptor extends SearchAdaptor {
             payment.getParams().setAmount(doubleTypeConverter.valueOf(eCommerceOrder.getPaymentTerms().getAmount()));
         }else {
             payment.getParams().setAmount(eCommerceOrder.getTotalPrice());
+        }
+
+        SettlementDetail detail = null;
+        if (payment.getSettlementDetails() == null){
+            payment.setSettlementDetails( new SettlementDetails());
+            detail = new SettlementDetail();
+        }else if (payment.getSettlementDetails().size() == 1){
+            for (SettlementDetail d : payment.getSettlementDetails()) {
+                if (d.getSettlementStatus() == PaymentStatus.NOT_PAID &&
+                        d.getSettlementPhase() == SettlementPhase.SALE_AMOUNT) {
+                    detail = d;
+                    break;
+                }
+            }
+        }
+        if (detail != null) {
+            detail.setUpiAddress(getProviderConfig().getVPA());
+            detail.setSettlementType(SettlementType.UPI);
+            detail.setSettlementPhase(SettlementPhase.SALE_AMOUNT);
+            detail.setSettlementCounterparty(SettlementCounterparty.SELLER_APP);
+            detail.setSettlementStatus(PaymentStatus.NOT_PAID);
+            boolean paid = isPaid(eCommerceOrder);
+            boolean isSettled = eCommerceOrder.isSettled();
+
+            if (payment.getCollectedBy() == CollectedBy.BPP) {
+                if (paid) {
+                    payment.setStatus(PaymentStatus.PAID);
+                    detail.setSettlementStatus(isSettled ? PaymentStatus.PAID : PaymentStatus.NOT_PAID);
+                } else {
+                    payment.setStatus(PaymentStatus.NOT_PAID);
+                    detail.setSettlementStatus(PaymentStatus.NOT_PAID);
+                }
+            } else {
+                if (paid) {
+                    payment.setStatus(PaymentStatus.PAID);
+                    detail.setSettlementStatus(isSettled ? PaymentStatus.PAID : PaymentStatus.NOT_PAID);
+                }
+            }
         }
 
     }

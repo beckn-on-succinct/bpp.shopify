@@ -445,10 +445,19 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 setDelivered(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
             }else if (m.getKey().equals("tracking_url")){
                 setTrackingUrl(m.getValue());
+            }else if (m.getKey().equals("settled_amount")) {
+                setSettledAmount(Database.getJdbcTypeHelper("").getTypeRef(Double.class).getTypeConverter().valueOf(m.getValue()));
             }
         }
 
     }
+    public double getSettledAmount(){
+        return getDouble("settled_amount");
+    }
+    public void setSettledAmount(double settled_amount){
+        set("settled_amount",settled_amount);
+    }
+
 
     public static class ShippingLines extends BecknObjects<ShippingLine>{
         public ShippingLines(){
