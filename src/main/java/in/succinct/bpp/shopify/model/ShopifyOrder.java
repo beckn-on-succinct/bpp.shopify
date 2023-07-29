@@ -10,9 +10,13 @@ import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
+import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
+import in.succinct.beckn.IssueSubCategory;
 import in.succinct.beckn.Order.Status;
+import in.succinct.beckn.ReturnReasons.ReturnReasonCode;
 import in.succinct.beckn.Tag;
+import in.succinct.bpp.core.db.model.ProviderConfig;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
 import in.succinct.bpp.shopify.model.Products.Metafield;
 import in.succinct.bpp.shopify.model.Products.Metafields;
@@ -975,5 +979,118 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         public void setAmount(int amount){
             set("amount",amount);
         }
+    }
+
+    public static class Refund extends ShopifyObjectWithId {
+        public Refund(){
+
+        }
+        public Refund(JSONObject o){
+            super(o);
+        }
+
+        public Date getCreatedAt(){
+            return getDate("created_at",TIMESTAMP_FORMAT);
+        }
+
+        public String getNote(){
+            return get("note");
+        }
+        public void setNote(String note){
+            set("note",note);
+        }
+
+        public Date getProcessedAt(){
+            return getTimestamp("processed_at");
+        }
+        public void setProcessedAt(Date processed_at){
+            set("processed_at",processed_at,TIMESTAMP_FORMAT);
+        }
+
+        public RefundLineItems getRefundLineItems(){
+            return get(RefundLineItems.class, "refund_line_items");
+        }
+        public void setRefundLineItems(RefundLineItems refund_line_items){
+            set("refund_line_items",refund_line_items);
+        }
+
+        public Transactions getTransactions(){
+            return get(Transactions.class, "transactions");
+        }
+        public void setTransactions(Transactions transactions){
+            set("transactions",transactions);
+        }
+
+        public static class RefundLineItem extends ShopifyObjectWithId {
+            public RefundLineItem() {
+            }
+
+            public RefundLineItem(String payload) {
+                super(payload);
+            }
+
+            public RefundLineItem(JSONObject object) {
+                super(object);
+            }
+
+            public RefundLineItem(LineItem lineItem, int quantity , CancellationReasonCode cancellationReasonCode, ProviderConfig config){
+                this(lineItem,quantity,cancellationReasonCode,null,config);
+            }
+            public RefundLineItem(LineItem lineItem, int quantity , ReturnReasonCode returnReasonCode, ProviderConfig config){
+                this(lineItem,quantity,null,returnReasonCode,config);
+            }
+            private RefundLineItem(LineItem lineItem, int quantity , CancellationReasonCode cancellationReasonCode, ReturnReasonCode returnReasonCode, ProviderConfig config){
+                setLineItemId(Long.parseLong(lineItem.getId()));
+                setQuantity(quantity);
+
+                double loss = (lineItem.getPrice()/lineItem.getQuantity())* quantity;
+
+                if (returnReasonCode != null){
+                    if (returnReasonCode.getIssueSubCategory() == IssueSubCategory.ITEM_QUALITY || loss < config.getMaxWriteOffAmountToAvoidRTO()) {
+                        setRestockType("no_stock"); // Leave the product no need to pick up !!
+                    }else {
+                        setRestockType("return");
+                    }
+                }else {
+                    setRestockType("cancel");
+                }
+
+            }
+            public String getRestockType(){
+                return get("restock_type");
+            }
+            public void setRestockType(String restock_type){
+                set("restock_type",restock_type);
+            }
+            
+            public long getLineItemId(){
+                return getLong("line_item_id");
+            }
+            public void setLineItemId(long line_item_id){
+                set("line_item_id",line_item_id);
+            }
+
+            public int getQuantity(){
+                return getInteger("quantity");
+            }
+            public void setQuantity(int quantity){
+                set("quantity",quantity);
+            }
+
+
+        }
+        public static class RefundLineItems extends BecknObjectsWithId<RefundLineItem>{
+            public RefundLineItems() {
+            }
+
+            public RefundLineItems(JSONArray array) {
+                super(array);
+            }
+
+            public RefundLineItems(String payload) {
+                super(payload);
+            }
+        }
+
     }
 }

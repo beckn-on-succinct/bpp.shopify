@@ -19,12 +19,15 @@ import com.venky.swf.sql.Conjunction;
 import com.venky.swf.sql.Expression;
 import com.venky.swf.sql.Operator;
 import com.venky.swf.sql.Select;
+import freemarker.core.ReturnInstruction.Return;
 import in.succinct.beckn.Address;
 import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.Billing;
 import in.succinct.beckn.BreakUp;
 import in.succinct.beckn.BreakUp.BreakUpElement;
 import in.succinct.beckn.BreakUp.BreakUpElement.BreakUpCategory;
+import in.succinct.beckn.Cancellation;
+import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
 import in.succinct.beckn.Contact;
 import in.succinct.beckn.Descriptor;
 import in.succinct.beckn.Document;
@@ -41,6 +44,8 @@ import in.succinct.beckn.ItemQuantity;
 import in.succinct.beckn.Items;
 import in.succinct.beckn.Location;
 import in.succinct.beckn.Locations;
+import in.succinct.beckn.Message;
+import in.succinct.beckn.Option;
 import in.succinct.beckn.Order;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Payment;
@@ -57,13 +62,15 @@ import in.succinct.beckn.Provider;
 import in.succinct.beckn.Quantity;
 import in.succinct.beckn.Quote;
 import in.succinct.beckn.Request;
+import in.succinct.beckn.ReturnReasons.ReturnReasonCode;
+import in.succinct.beckn.SellerException;
 import in.succinct.beckn.SellerException.CancellationNotPossible;
 import in.succinct.beckn.SellerException.GenericBusinessError;
 import in.succinct.beckn.SellerException.OrderConfirmFailure;
+import in.succinct.beckn.SellerException.UpdationNotPossible;
 import in.succinct.beckn.SettlementDetail;
 import in.succinct.beckn.SettlementDetail.SettlementCounterparty;
 import in.succinct.beckn.SettlementDetail.SettlementPhase;
-
 import in.succinct.beckn.SettlementDetail.SettlementType;
 import in.succinct.beckn.SettlementDetails;
 import in.succinct.beckn.Tag;
@@ -94,6 +101,9 @@ import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
 import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedule;
 import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedules;
 import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentTerms;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Refund;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Refund.RefundLineItem;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Refund.RefundLineItems;
 import in.succinct.bpp.shopify.model.ShopifyOrder.ShippingLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLines;
@@ -104,6 +114,7 @@ import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
 import java.math.BigDecimal;
+import java.sql.Ref;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -482,24 +493,26 @@ public class ECommerceAdaptor extends SearchAdaptor {
         JSONObject params = new JSONObject();
         params.put("reason", "customer");
 
-
         JSONObject response = helper.post(String.format("/orders/%s/cancel.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), params);
         String error = (String)response.get("error");
         if (!ObjectUtil.isVoid(error)) {
             throw new CancellationNotPossible(error);
         }
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
-        return getBecknOrder(eCommerceOrder);
+        Order ret=  getBecknOrder(eCommerceOrder);
+        return ret;
     }
 
     @Override
     public Order getStatus(Order order) {
+        return getBecknOrder(getShopifyOrder(order));
+    }
 
+    public ShopifyOrder getShopifyOrder(Order order){
         /* Take status message and fill response with on_status message */
         JSONObject response = helper.get(String.format("/orders/%s.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), new JSONObject());
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
-
-        return getBecknOrder(eCommerceOrder);
+        return eCommerceOrder;
     }
 
 
@@ -542,7 +555,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 location.setCountry(new in.succinct.beckn.Country());
                 location.getCountry().setCode(location.getAddress().getCountry());
                 */
-                 //location.setTime(getProviderConfig().getTime());
+                location.setTime(getProviderConfig().getTime());
                 location.setDescriptor(new Descriptor());
                 location.getDescriptor().setName(location.getAddress().getName());
 
@@ -1053,6 +1066,16 @@ public class ECommerceAdaptor extends SearchAdaptor {
         order.setUpdatedAt(eCommerceOrder.getUpdatedAt());
 
 
+        Tags tags = order.getTags();
+
+        if (tags == null){
+            tags = new Tags();
+            order.setTags(tags);
+        }
+        Cancellation cancellation = order.getCancellation();
+        Option selectedReason = cancellation == null ? null : cancellation.getSelectedReason();
+        Descriptor descriptor = selectedReason == null ? null : selectedReason.getDescriptor();
+        order.getTags().set("cancellation_reason_id", descriptor == null ? null : descriptor.getCode());
         return order;
     }
 
@@ -1206,5 +1229,86 @@ public class ECommerceAdaptor extends SearchAdaptor {
         billing.setAddress(address);
         billing.setPhone(source.getPhone());
     }
+
+
+    @Override
+    public void update(Request request, Request reply) {
+        String update_target = request.getMessage().get("update_target");
+        if (ObjectUtil.isVoid(update_target) && !ObjectUtil.equals(update_target,"item")) {
+            throw new SellerException.UpdationNotPossible("\"item\" is the only update_target supported");
+        }
+        Order input = request.getMessage().getOrder();
+
+        ShopifyOrder localOrder = getShopifyOrder(input);
+
+        Map<String,LineItem> lineItemMap = new HashMap<>();
+        for (LineItem lineItem : localOrder.getLineItems()){
+            lineItemMap.put(BecknIdHelper.getBecknId(String.valueOf(lineItem.getVariantId()),getSubscriber(),Entity.item),lineItem);
+        }
+
+        Refund calculateRefundInput = new Refund();
+        StringBuilder notes = new StringBuilder();
+        calculateRefundInput.setRefundLineItems(new RefundLineItems());
+
+
+        for (Item item : input.getItems()){
+
+            Tags tags = item.getTags();
+            String update_type = tags.get("update_type");
+            String reason_code = tags.get("reason_code");
+            int quantity = item.getQuantity().getCount();
+            String image = tags.get("image");
+            if (notes.length() > 0){
+                notes.append("\n");
+            }
+
+
+            if (ObjectUtil.equals( update_type,"return")){
+                Images images = new Images();
+                String[] imgArray = ObjectUtil.isVoid(image) ? new String[]{} : image.split(",");
+                for (String img: imgArray) {
+                    if (!ObjectUtil.isVoid(img)) {
+                        images.add(img);
+                    }
+                }
+                if (images.isEmpty()){
+                    throw new SellerException.InvalidReturnRequest("Please attach images of returned products");
+                }
+
+                ReturnReasonCode reasonCode = ReturnReasonCode.convertor.valueOf(reason_code);
+                notes.append(String.format("Return: %s - Item %s" , reasonCode.name(), item.getId()));
+
+
+                RefundLineItem refundLineItem = new RefundLineItem(lineItemMap.get(item.getId()),quantity,reasonCode,getProviderConfig());
+                calculateRefundInput.getRefundLineItems().add(refundLineItem);
+            }else if (ObjectUtil.equals(update_type,"cancel")){
+                CancellationReasonCode reasonCode = CancellationReasonCode.convertor.valueOf(reason_code);
+                notes.append(String.format("Cancellation: %s - Item %s" , reasonCode.name(), item.getId()));
+
+
+                RefundLineItem refundLineItem = new RefundLineItem(lineItemMap.get(item.getId()),quantity,reasonCode,getProviderConfig());
+                calculateRefundInput.getRefundLineItems().add(refundLineItem);
+            }else {
+                throw new SellerException.UpdationNotPossible(String.format("%s is not a valid update_type",update_type ));
+            }
+        }
+        calculateRefundInput.setNote(notes.toString());
+        JSONObject calculatedRefundHolder = helper.post(String.format("/orders/%s/refunds/calculate.json",localOrder.getId()),new JSONObject());
+        Refund calculated = new Refund((JSONObject) calculatedRefundHolder.get("refund"));
+        calculated.getTransactions().forEach(t-> {
+            if (t.getKind().equals("suggested_return")) {
+                t.setKind("return");
+            }
+        });
+        JSONObject refundHolder = helper.post(String.format("/orders/%s/refunds.json",localOrder.getId()),new JSONObject());
+        Refund refund = new Refund((JSONObject) refundHolder.get("refund"));
+
+
+        reply.setMessage(new Message());
+        Order current = getStatus(input);
+        reply.getMessage().setOrder(current);
+    }
+
+
 
 }

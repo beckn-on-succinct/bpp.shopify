@@ -4,7 +4,6 @@ import com.venky.core.string.StringUtil;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
-
 import in.succinct.bpp.shopify.model.Products.Product;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
