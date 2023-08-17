@@ -112,6 +112,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     public Fulfillments getFulfillments(){
         return get(Fulfillments.class, "fulfillments");
     }
+    public void setFulfillments(Fulfillments fulfillments){
+        set("fulfillments",fulfillments);
+    }
 
     public LineItems getLineItems(){
         return get(LineItems.class, "line_items");
@@ -275,6 +278,24 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
 
+    public Refunds getRefunds(){
+        return get(Refunds.class, "refunds");
+    }
+    public void setRefunds(Refunds refunds){
+        set("refunds",refunds);
+    }
+    public static class Refunds extends BecknObjectsWithId<Refund> {
+        public Refunds() {
+        }
+
+        public Refunds(JSONArray array) {
+            super(array);
+        }
+
+        public Refunds(String payload) {
+            super(payload);
+        }
+    }
 
     public ShippingLine getShippingLine(){
         ShippingLines shippingLines = getShippingLines();
@@ -633,6 +654,19 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("taxable",taxable);
         }
 
+        public double getFulfillableQuantity(){
+            return getDouble("fulfillable_quantity");
+        }
+        public void setFulfillableQuantity(double fulfillable_quantity){
+            set("fulfillable_quantity",fulfillable_quantity);
+        }
+        public Long getFulfillmentLineItemId(){
+            return get("fulfillment_line_item_id");
+        }
+        public void setFulfillmentLineItemId(Long fulfillment_line_item_id){
+            set("fulfillment_line_item_id",fulfillment_line_item_id);
+        }
+
     }
 
     public static class TaxLine extends BecknObject{
@@ -919,6 +953,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("shipment_status",shipment_status);
         }
 
+        public LineItems getLineItems(){
+            return get(LineItems.class, "line_items");
+        }
+        public void setLineItems(LineItems line_items){
+            set("line_items",line_items);
+        }
+
 
 
     }
@@ -981,6 +1022,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         }
     }
 
+
     public static class Refund extends ShopifyObjectWithId {
         public Refund(){
 
@@ -1021,6 +1063,18 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("transactions",transactions);
         }
 
+        public static class RefundLineItems extends BecknObjectsWithId<RefundLineItem>{
+            public RefundLineItems() {
+            }
+
+            public RefundLineItems(JSONArray array) {
+                super(array);
+            }
+
+            public RefundLineItems(String payload) {
+                super(payload);
+            }
+        }
         public static class RefundLineItem extends ShopifyObjectWithId {
             public RefundLineItem() {
             }
@@ -1047,7 +1101,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
                 if (returnReasonCode != null){
                     if (returnReasonCode.getIssueSubCategory() == IssueSubCategory.ITEM_QUALITY || loss < config.getMaxWriteOffAmountToAvoidRTO()) {
-                        setRestockType("no_stock"); // Leave the product no need to pick up !!
+                        setRestockType("no_restock"); // Leave the product no need to pick up !!
                     }else {
                         setRestockType("return");
                     }
@@ -1061,6 +1115,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             }
             public void setRestockType(String restock_type){
                 set("restock_type",restock_type);
+            }
+
+            public LineItem getLineItem(){
+                return get(LineItem.class, "line_item");
+            }
+            public void setLineItem(LineItem line_item){
+                set("line_item",line_item);
             }
             
             public long getLineItemId(){
@@ -1078,18 +1139,6 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             }
 
 
-        }
-        public static class RefundLineItems extends BecknObjectsWithId<RefundLineItem>{
-            public RefundLineItems() {
-            }
-
-            public RefundLineItems(JSONArray array) {
-                super(array);
-            }
-
-            public RefundLineItems(String payload) {
-                super(payload);
-            }
         }
 
     }
