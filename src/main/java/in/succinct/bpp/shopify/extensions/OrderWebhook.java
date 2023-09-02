@@ -1,11 +1,9 @@
 package in.succinct.bpp.shopify.extensions;
 
-import com.venky.core.security.Crypt;
-import com.venky.core.string.StringUtil;
 import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
-import com.venky.extension.Extension;
 import com.venky.extension.Registry;
+import com.venky.swf.db.annotations.column.COLUMN_DEF;
 import com.venky.swf.path.Path;
 import in.succinct.beckn.Context;
 import in.succinct.beckn.Message;
@@ -13,9 +11,10 @@ import in.succinct.beckn.Order;
 import in.succinct.beckn.Order.OrderReconStatus;
 import in.succinct.beckn.Order.Orders;
 import in.succinct.beckn.Order.ReconStatus;
+import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Request;
-import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
+import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.core.db.model.rsp.Settlement;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
@@ -23,9 +22,6 @@ import in.succinct.bpp.shopify.model.ShopifyOrder;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -43,10 +39,20 @@ public class OrderWebhook extends ShopifyWebhook{
 
         // Check old order here and if old order is not settled an now it is settled. Also send on_receiver_recon
         String becknTransactionId = eCommerceAdaptor.getBecknTransactionId(shopifyOrder);
+        LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
 
-        Order lastKnownOrderState = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber()).getLastKnownOrder(becknTransactionId);
+        Order lastKnownOrderState = localOrderSynchronizer.getLastKnownOrder(becknTransactionId);
+        if (ObjectUtil.equals(path.getHeaders().get("X-Shopify-Topic"),"orders/updated")){
+            if (!localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Accepted) || localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Completed)){
+                return;
+            }
+        }
+
 
         Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); //Fill all attributes here.
+        if (becknOrder.getState() == Status.Cancelled && !localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Cancelled) ){
+            event = "on_cancel";
+        }
         if (lastKnownOrderState.getReconStatus() == ReconStatus.PAID){
             Request on_receiver_recon = new Request();
             Context context = new Context();

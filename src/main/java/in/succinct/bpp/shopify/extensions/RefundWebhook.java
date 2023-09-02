@@ -2,6 +2,7 @@ package in.succinct.bpp.shopify.extensions;
 
 import com.venky.core.security.Crypt;
 import com.venky.core.string.StringUtil;
+import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Extension;
 import com.venky.extension.Registry;
@@ -21,6 +22,9 @@ import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 import in.succinct.bpp.shopify.model.ShopifyOrder;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Transaction;
+import in.succinct.bpp.shopify.model.ShopifyOrder.Transactions;
+import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
@@ -38,26 +42,39 @@ public class RefundWebhook extends ShopifyWebhook {
     public void hook(ECommerceAdaptor eCommerceAdaptor, NetworkAdaptor networkAdaptor,Path path, String payload) {
         String event = path.parameter();
 
-        JSONObject ePayload = (JSONObject) JSONValue.parse(payload);
-        JSONObject eReturn = (JSONObject) ePayload.get("return");
-        JSONObject eOrder = (JSONObject) ePayload.get("order");
 
-        String refundId = StringUtil.valueOf(ePayload.get("id"));
-        String orderId = StringUtil.valueOf(eOrder.get("id"));
-        String returnId = StringUtil.valueOf(eReturn.get("Id"));
-        JSONObject amount = (JSONObject) (((JSONObject)ePayload.get("totalRefundSet")).get("presentmentMoney"));
+        JSONObject ePayload = (JSONObject) JSONValue.parse(payload);
+        String refundId = String.valueOf(ePayload.get("id"));
+
+        String orderId = StringUtil.valueOf(ePayload.get("order_id"));
+        JSONObject eReturn = (JSONObject) ePayload.get("return");
+        String returnId = StringUtil.valueOf(eReturn.get("admin_graphql_api_id"));
+
+
+        Transactions transactions = new Transactions((JSONArray) ePayload.get("transactions"));
+
 
 
         ShopifyOrder shopifyOrder = eCommerceAdaptor.getShopifyOrder(orderId);
-        Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder);
 
-        Return returnReference = becknOrder.getReturns().get(returnId);
+        LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
+        Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder));
+
+        Return returnReference = lastKnownOrder.getReturns().get(returnId);
         returnReference.setReturnStatus(ReturnStatus.REFUNDED);
         returnReference.setRefund(new Amount());
-        returnReference.getRefund().setCurrency((String)amount.get("currencyCode"));
-        returnReference.getRefund().setValue(Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter().valueOf(amount.get("amount")));
+        returnReference.setRefundId(refundId);
 
+        Bucket amount = new Bucket();
+        for (Transaction transaction : transactions) {
+            returnReference.getRefund().setCurrency(transaction.getCurrency());
+            amount.increment(transaction.getAmount());
+        }
+        returnReference.getRefund().setValue(amount.intValue());
 
+        localOrderSynchronizer.sync(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),lastKnownOrder);
+
+        Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder);
 
         final Request request = new Request();
         request.setMessage(new Message());

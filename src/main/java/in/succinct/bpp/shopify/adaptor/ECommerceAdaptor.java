@@ -85,6 +85,7 @@ import in.succinct.bpp.core.adaptor.api.BecknIdHelper;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper.Entity;
 import in.succinct.bpp.core.adaptor.fulfillment.FulfillmentStatusAdaptor;
 import in.succinct.bpp.core.adaptor.fulfillment.FulfillmentStatusAdaptor.FulfillmentStatusAudit;
+import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.core.db.model.ProviderConfig.Serviceability;
 import in.succinct.bpp.search.adaptor.SearchAdaptor;
@@ -236,7 +237,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
         if (bo.getItems() != null) {
             bo.getItems().forEach(boItem -> {
                 in.succinct.bpp.search.db.model.Item dbItem = getItem(boItem.getId());
-                if (dbItem == null){
+                if (dbItem == null || !dbItem.isActive()){
                     return;
                 }
                 Item refreshedBoItem = new Item(dbItem.getObjectJson());
@@ -587,169 +588,166 @@ public class ECommerceAdaptor extends SearchAdaptor {
     }
 
     @Override
-    public Items getItems() {
-        return cache.get(Items.class, () -> {
-            Items items = new Items();
-            Store store = getStore();
+    public Items getItems(){
+        return cache.get(Items.class, () -> getItems(getPublishedProducts()));
+    }
 
+    public Items getItems(Set<String> specificProductIds) {
+        Items items = new Items();
+        Store store = getStore();
+        InventoryLevels levels = getInventoryLevels();
+        //Set<String> specificProductIds = getPublishedProducts();
+        Cache<Long, List<Long>> inventoryLocations = new Cache<>(0, 0) {
+            @Override
+            protected List<Long> getValue(Long aLong) {
+                return new ArrayList<>();
+            }
+        };
+        levels.forEach(level -> inventoryLocations.get(level.getInventoryItemId()).add(level.getLocationId()));
 
-            InventoryLevels levels = getInventoryLevels();
+        Products products = getProducts(specificProductIds);
+        products.forEach(product -> {
+            for (ProductVariant productVariant : product.getProductVariants()) {
+                inventoryLocations.get(productVariant.getInventoryItemId()); // Just load keys
+            }
+        });
 
-            Set<String> publishedProducts = getPublishedProducts();
-            Cache<Long, List<Long>> inventoryLocations = new Cache<>(0, 0) {
-                @Override
-                protected List<Long> getValue(Long aLong) {
-                    return new ArrayList<>();
-                }
-            };
-            levels.forEach(level -> inventoryLocations.get(level.getInventoryItemId()).add(level.getLocationId()));
-            Products products = getProducts();
-            products.forEach(product -> {
-                for (ProductVariant productVariant : product.getProductVariants()) {
-                    inventoryLocations.get(productVariant.getInventoryItemId()); // Just load keys
-                }
-            });
+        InventoryItems inventoryItems = getInventoryItems(inventoryLocations.keySet());
 
-            InventoryItems inventoryItems = getInventoryItems(inventoryLocations.keySet());
+        Map<String, Double> taxRateMap = getTaxRateMap();
 
-            Map<String, Double> taxRateMap = getTaxRateMap();
+        for (Product product : products) {
 
-            for (Product product : products) {
-                if (!publishedProducts.contains(product.getId())) {
+            for (ProductVariant variant : product.getProductVariants()) {
+                InventoryItem inventoryItem = inventoryItems.get(StringUtil.valueOf(variant.getInventoryItemId()));
+                if (inventoryItem == null){
                     continue;
                 }
-
-                for (ProductVariant variant : product.getProductVariants()) {
-                    InventoryItem inventoryItem = inventoryItems.get(StringUtil.valueOf(variant.getInventoryItemId()));
-                    if (inventoryItem == null){
-                        continue;
-                    }
-                    if (!inventoryItem.isTracked() && inventoryLocations.get(variant.getInventoryItemId()).isEmpty()){
-                        inventoryLocations.get(variant.getInventoryItemId()).add(getStore().getPrimaryLocationId());
-                    }
-
-                    inventoryLocations.get(variant.getInventoryItemId()).forEach(location_id -> {
-                        Item item = new Item();
-                        item.setId(BecknIdHelper.getBecknId(variant.getId(), getSubscriber(), Entity.item));
-
-                        Descriptor descriptor = new Descriptor();
-                        item.setDescriptor(descriptor);
-                        if (!ObjectUtil.isVoid(variant.getBarCode())) {
-                            descriptor.setCode(variant.getBarCode());
-                        }else {
-                            descriptor.setCode(product.getTitle());
-                        }
-
-                        if (ObjectUtil.equals(variant.getTitle(),"Default Title")){
-                            descriptor.setName(product.getTitle());
-                        }else {
-                            descriptor.setName(String.format("%s - ( %s )" ,product.getTitle(),variant.getTitle()));
-                        }
-
-                        descriptor.setShortDesc(descriptor.getName());
-                        descriptor.setLongDesc(descriptor.getName());
-                        descriptor.setImages(new Images());
-                        ProductImages productImages = product.getImages();
-
-                        if (variant.getImageId() > 0) {
-                            ProductImage image = productImages.get(StringUtil.valueOf(variant.getImageId()));
-                            if (image != null) {
-                                descriptor.getImages().add(image.getSrc());
-                            }
-                        } else if (productImages.size() > 0) {
-                            for (ProductImage i : productImages) {
-                                descriptor.getImages().add(i.getSrc());
-                            }
-                        }
-                        descriptor.setSymbol(descriptor.getImages().get(0));
-
-                        item.setCategoryId(getProviderConfig().getCategory().getId());
-                        item.setCategoryIds(new BecknStrings());
-                        item.getCategoryIds().add(item.getCategoryId());
-                        item.setTags(new Tags());
-
-                        for (String tag: product.getTagSet()) {
-                            item.getTags().set(tag, "true");
-                        }
-                        item.getTags().set("hsn_code", inventoryItem.getHarmonizedSystemCode());
-                        item.getTags().set("country_of_origin", inventoryItem.getCountryCodeOfOrigin());
-                        item.getTags().set("tax_rate", StringUtil.valueOf(taxRateMap.get(inventoryItem.getHarmonizedSystemCode())));
-                        item.getTags().set("product_id", variant.getProductId());
-                        if (product.isVeg()) {
-                            item.getTags().set("veg", "yes");
-                            item.getTags().set("non_veg", "no");
-                        }else {
-                            item.getTags().set("veg", "no");
-                            item.getTags().set("non_veg", "yes");
-                        }
-
-
-
-                        item.setLocationId(BecknIdHelper.getBecknId(StringUtil.valueOf(location_id), getSubscriber(), Entity.provider_location));
-                        item.setLocationIds(new BecknStrings());
-                        item.getLocationIds().add(item.getLocationId());
-
-                        /* Yhis should be abtracted out TODO */
-                        if (getProviderConfig().getCategory().getDescriptor().getName().equals("Fruits and Vegetables")) {
-                            item.setVeggiesFruits(new VeggiesFruits());
-                            item.getVeggiesFruits().setNetQuantity(variant.getGrams() + " gms");
-                        }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Foods")) {
-                            item.setPrepackagedFood(new PrepackagedFood());
-                            item.getPrepackagedFood().setNetQuantity(variant.getGrams() + " gms");
-                            item.getPrepackagedFood().setBrandOwnerAddress(getProviderConfig().getLocation().getAddress().flatten());
-                            item.getPrepackagedFood().setBrandOwnerName(getProviderConfig().getFulfillmentProviderName());
-                            item.getPrepackagedFood().setBrandOwnerFSSAILicenseNo(getProviderConfig().getFssaiRegistrationNumber());
-                        }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Commodities")) {
-                            item.setPackagedCommodity(new PackagedCommodity());
-                            item.getPackagedCommodity().setNetQuantityOrMeasureOfCommodityInPkg(variant.getGrams() + " gms");
-                            item.getPackagedCommodity().setManufacturerOrPackerName(getProviderConfig().getFulfillmentProviderName());
-                            item.getPackagedCommodity().setManufacturerOrPackerAddress(getProviderConfig().getLocation().getAddress().flatten());
-                            item.getPackagedCommodity().setCommonOrGenericNameOfCommodity(product.getProductType());
-                            //For statutory requirements show images.
-                        }
-
-
-
-                        Price price = new Price();
-                        item.setPrice(price);
-                        price.setMaximumValue(variant.getMrp());
-                        price.setListedValue(variant.getPrice());
-                        price.setCurrency(getStore().getCurrency());
-                        price.setValue(variant.getPrice());
-                        price.setOfferedValue(variant.getPrice());
-                        price.setCurrency("INR");
-
-                        item.setPaymentIds(new BecknStrings());
-                        for (Payment payment : getSupportedPaymentCollectionMethods()) {
-                            item.getPaymentIds().add(payment.getId()); //Only allow By BAP , ON_ORDER
-                        }
-
-                        item.setReturnable(getProviderConfig().isReturnSupported());
-                        if (item.isReturnable()){
-                            item.setReturnWindow(getProviderConfig().getReturnWindow());
-                            item.setSellerPickupReturn(getProviderConfig().isReturnPickupSupported());
-                        }else {
-                            item.setReturnWindow(Duration.ofDays(0));
-                        }
-
-                        item.setCancellable(true);
-                        item.setTimeToShip(getProviderConfig().getTurnAroundTime());
-                        item.setAvailableOnCod(getProviderConfig().isCodSupported());
-
-                        item.setContactDetailsConsumerCare(getProviderConfig().getLocation().getAddress().flatten() + " " + getProviderConfig().getSupportContact().flatten());
-                        item.setFulfillmentIds(new BecknStrings());
-                        for (Fulfillment fulfillment : getFulfillments()) {
-                            item.getFulfillmentIds().add(fulfillment.getId());
-                        }
-
-
-                        items.add(item);
-
-                    });
+                if (!inventoryItem.isTracked() && inventoryLocations.get(variant.getInventoryItemId()).isEmpty()){
+                    inventoryLocations.get(variant.getInventoryItemId()).add(getStore().getPrimaryLocationId());
                 }
+
+                inventoryLocations.get(variant.getInventoryItemId()).forEach(location_id -> {
+                    Item item = new Item();
+                    item.setId(BecknIdHelper.getBecknId(variant.getId(), getSubscriber(), Entity.item));
+
+                    Descriptor descriptor = new Descriptor();
+                    item.setDescriptor(descriptor);
+                    if (!ObjectUtil.isVoid(variant.getBarCode())) {
+                        descriptor.setCode(variant.getBarCode());
+                    }else {
+                        descriptor.setCode(product.getTitle());
+                    }
+
+                    if (ObjectUtil.equals(variant.getTitle(),"Default Title")){
+                        descriptor.setName(product.getTitle());
+                    }else {
+                        descriptor.setName(String.format("%s - ( %s )" ,product.getTitle(),variant.getTitle()));
+                    }
+
+                    descriptor.setShortDesc(descriptor.getName());
+                    descriptor.setLongDesc(descriptor.getName());
+                    descriptor.setImages(new Images());
+                    ProductImages productImages = product.getImages();
+
+                    if (variant.getImageId() > 0) {
+                        ProductImage image = productImages.get(StringUtil.valueOf(variant.getImageId()));
+                        if (image != null) {
+                            descriptor.getImages().add(image.getSrc());
+                        }
+                    } else if (productImages.size() > 0) {
+                        for (ProductImage i : productImages) {
+                            descriptor.getImages().add(i.getSrc());
+                        }
+                    }
+                    descriptor.setSymbol(descriptor.getImages().get(0));
+
+                    item.setCategoryId(getProviderConfig().getCategory().getId());
+                    item.setCategoryIds(new BecknStrings());
+                    item.getCategoryIds().add(item.getCategoryId());
+                    item.setTags(new Tags());
+
+                    for (String tag: product.getTagSet()) {
+                        item.getTags().set(tag, "true");
+                    }
+                    item.getTags().set("hsn_code", inventoryItem.getHarmonizedSystemCode());
+                    item.getTags().set("country_of_origin", inventoryItem.getCountryCodeOfOrigin());
+                    item.getTags().set("tax_rate", StringUtil.valueOf(taxRateMap.get(inventoryItem.getHarmonizedSystemCode())));
+                    item.getTags().set("product_id", variant.getProductId());
+                    if (product.isVeg()) {
+                        item.getTags().set("veg", "yes");
+                        item.getTags().set("non_veg", "no");
+                    }else {
+                        item.getTags().set("veg", "no");
+                        item.getTags().set("non_veg", "yes");
+                    }
+
+
+
+                    item.setLocationId(BecknIdHelper.getBecknId(StringUtil.valueOf(location_id), getSubscriber(), Entity.provider_location));
+                    item.setLocationIds(new BecknStrings());
+                    item.getLocationIds().add(item.getLocationId());
+
+                    /* Yhis should be abtracted out TODO */
+                    if (getProviderConfig().getCategory().getDescriptor().getName().equals("Fruits and Vegetables")) {
+                        item.setVeggiesFruits(new VeggiesFruits());
+                        item.getVeggiesFruits().setNetQuantity(variant.getGrams() + " gms");
+                    }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Foods")) {
+                        item.setPrepackagedFood(new PrepackagedFood());
+                        item.getPrepackagedFood().setNetQuantity(variant.getGrams() + " gms");
+                        item.getPrepackagedFood().setBrandOwnerAddress(getProviderConfig().getLocation().getAddress().flatten());
+                        item.getPrepackagedFood().setBrandOwnerName(getProviderConfig().getFulfillmentProviderName());
+                        item.getPrepackagedFood().setBrandOwnerFSSAILicenseNo(getProviderConfig().getFssaiRegistrationNumber());
+                    }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Commodities")) {
+                        item.setPackagedCommodity(new PackagedCommodity());
+                        item.getPackagedCommodity().setNetQuantityOrMeasureOfCommodityInPkg(variant.getGrams() + " gms");
+                        item.getPackagedCommodity().setManufacturerOrPackerName(getProviderConfig().getFulfillmentProviderName());
+                        item.getPackagedCommodity().setManufacturerOrPackerAddress(getProviderConfig().getLocation().getAddress().flatten());
+                        item.getPackagedCommodity().setCommonOrGenericNameOfCommodity(product.getProductType());
+                        //For statutory requirements show images.
+                    }
+
+
+
+                    Price price = new Price();
+                    item.setPrice(price);
+                    price.setMaximumValue(variant.getMrp());
+                    price.setListedValue(variant.getPrice());
+                    price.setCurrency(getStore().getCurrency());
+                    price.setValue(variant.getPrice());
+                    price.setOfferedValue(variant.getPrice());
+                    price.setCurrency("INR");
+
+                    item.setPaymentIds(new BecknStrings());
+                    for (Payment payment : getSupportedPaymentCollectionMethods()) {
+                        item.getPaymentIds().add(payment.getId()); //Only allow By BAP , ON_ORDER
+                    }
+
+                    item.setReturnable(getProviderConfig().isReturnSupported());
+                    if (item.isReturnable()){
+                        item.setReturnWindow(getProviderConfig().getReturnWindow());
+                        item.setSellerPickupReturn(getProviderConfig().isReturnPickupSupported());
+                    }else {
+                        item.setReturnWindow(Duration.ofDays(0));
+                    }
+
+                    item.setCancellable(true);
+                    item.setTimeToShip(getProviderConfig().getTurnAroundTime());
+                    item.setAvailableOnCod(getProviderConfig().isCodSupported());
+
+                    item.setContactDetailsConsumerCare(getProviderConfig().getLocation().getAddress().flatten() + " " + getProviderConfig().getSupportContact().flatten());
+                    item.setFulfillmentIds(new BecknStrings());
+                    for (Fulfillment fulfillment : getFulfillments()) {
+                        item.getFulfillmentIds().add(fulfillment.getId());
+                    }
+
+
+                    items.add(item);
+
+                });
             }
-            return items;
-        });
+        }
+        return items;
     }
 
     public Map<String,Double> getTaxRateMap(){
@@ -831,33 +829,41 @@ public class ECommerceAdaptor extends SearchAdaptor {
         });
     }
     @SuppressWarnings("unchecked")
-    private Products getProducts(){
-        return cache.get(Products.class,()->{
-            JSONObject input = new JSONObject();
-            input.put("limit", 250);
+    private Products getProducts(Set<String> specificProductIds){
 
-            Products products = new Products();
-
-            Page<JSONObject> productsPage = new Page<>();
-            productsPage.next = "/products.json";
-            while (productsPage.next != null) {
-                productsPage = helper.getPage(productsPage.next, input);
-                if (productsPage.data == null){
-                    break;
-                }
-                Products productsInPage = new Products((JSONArray) productsPage.data.get("products"));
-                for (Product product : productsInPage) {
-                    if (!product.isActive()) {
-                        continue;
-                    }
-                    if (product.getProductVariants() == null){
-                        continue;
-                    }
-                    products.add(product);
-                }
+        StringBuilder idsQuery = new StringBuilder();
+        for (String id: specificProductIds){
+            if (idsQuery.length() >0){
+                idsQuery.append(",");
             }
-            return products;
-        });
+            idsQuery.append(id);
+        }
+        JSONObject input = new JSONObject();
+        input.put("limit", 250);
+        input.put("ids",idsQuery);
+
+        Products products = new Products();
+
+        Page<JSONObject> productsPage = new Page<>();
+        productsPage.next = "/products.json";
+        while (productsPage.next != null) {
+            productsPage = helper.getPage(productsPage.next, input);
+            input.remove("ids");
+            if (productsPage.data == null){
+                break;
+            }
+            Products productsInPage = new Products((JSONArray) productsPage.data.get("products"));
+            for (Product product : productsInPage) {
+                if (!product.isActive()) {
+                    continue;
+                }
+                if (product.getProductVariants() == null){
+                    continue;
+                }
+                products.add(product);
+            }
+        }
+        return products;
     }
 
     @SuppressWarnings("unchecked")
@@ -958,6 +964,13 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         Bucket orderRefundAmount = new Bucket();
         Map<String,Map<String,Item>> returnedItems = getReturnedItems(order);
+        Map<String,Return> refundReturnMap = new HashMap<>(){{
+            for (Return aReturn : order.getReturns()) {
+                if (!ObjectUtil.isVoid(aReturn.getRefundId())) {
+                    put(aReturn.getRefundId(), aReturn);
+                }
+            }
+        }};
 
         Map<String,RefundLineItems> refundLineItemsMap = new UnboundedCache<String, RefundLineItems>() {
             @Override
@@ -968,8 +981,12 @@ public class ECommerceAdaptor extends SearchAdaptor {
         for (Refund refund : eCommerceOrder.getRefunds()) {
             for (RefundLineItem refundLineItem : refund.getRefundLineItems()) {
                 LineItem lineItem = refundLineItem.getLineItem();
-                orderRefundAmount.increment(lineItem.getPrice());
+                orderRefundAmount.increment(lineItem.getPrice() * refundLineItem.getQuantity());
+                if (refundReturnMap.containsKey(refund.getId())) {
+                    refundLineItem.setReturnId(refundReturnMap.get(refund.getId()).getId());
+                }
                 refundLineItemsMap.get(lineItem.getId()).add(refundLineItem);
+
             }
         }
 
@@ -1060,19 +1077,28 @@ public class ECommerceAdaptor extends SearchAdaptor {
                         protected RefundLineItems getValue(String s) {
                             return new RefundLineItems();
                         }
-                    }, new Returns(), null);
+                    }, new Returns(), null, refundedLineItem.getQuantity());
+
                     //}, fulfillmentId);
 
+                    if (refundedLineItem.getReturnId() != null){
+                        item.setTags(order.getReturns().get(refundedLineItem.getReturnId()).getItems().get(item.getId()).getTags());
+                    }
                     Tags tags = item.getTags();
                     if (tags == null) {
                         item.setTags(new Tags());
                     }
+
                     switch (refundedLineItem.getRestockType()) {
                         case "cancel":
                             item.getTags().set("status", "Cancelled");
                             break;
                         case "no_restock":
-                            item.getTags().set("status", "Liquidated");
+                            if (refundedLineItem.getReturnId() != null) {
+                                item.getTags().set("status", "Liquidated");
+                            }else {
+                                item.getTags().set("status", "Cancelled");
+                            }
                             break;
                         case "return":
                             item.getTags().set("status", "Return_Delivered");
@@ -1240,8 +1266,10 @@ public class ECommerceAdaptor extends SearchAdaptor {
             itemPrice.setItemId(quoteItem.getId());
         }
     }
-
-    private Item createItemFromECommerceLineItem(LineItem eCommerceLineItem, Map<String, RefundLineItems> refundedMap, Returns returns, String fulfillmentId) {
+    private Item createItemFromECommerceLineItem(LineItem eCommerceLineItem, Map<String, RefundLineItems> refundedMap, Returns returns, String fulfillmentId){
+        return createItemFromECommerceLineItem(eCommerceLineItem,refundedMap,returns,fulfillmentId,doubleTypeConverter.valueOf(eCommerceLineItem.getQuantity()).intValue());
+    }
+    private Item createItemFromECommerceLineItem(LineItem eCommerceLineItem, Map<String, RefundLineItems> refundedMap, Returns returns, String fulfillmentId, int overrideLineQuantity) {
         Item item = new Item();
         item.setDescriptor(new Descriptor());
         item.setId(BecknIdHelper.getBecknId(String.valueOf(eCommerceLineItem.getVariantId()), getSubscriber(), Entity.item));
@@ -1266,8 +1294,8 @@ public class ECommerceAdaptor extends SearchAdaptor {
         int refundQty = 0;
         double refundPrice = 0;
         for (RefundLineItem lineItem : refundedMap.get(eCommerceLineItem.getId())) {
-            refundQty += lineItem.getLineItem().getQuantity();
-            refundPrice+= ( lineItem.getLineItem().getPrice() * lineItem.getLineItem().getQuantity());
+            refundQty += lineItem.getQuantity();
+            refundPrice+= ( lineItem.getLineItem().getPrice() * lineItem.getQuantity());
         }
 
         int returnProcessingQty = 0 ;
@@ -1283,14 +1311,14 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
 
 
-        quantity.setCount(doubleTypeConverter.valueOf(eCommerceLineItem.getQuantity()).intValue() - refundQty - returnProcessingQty);
+        quantity.setCount(overrideLineQuantity - refundQty - returnProcessingQty);
 
         item.setQuantity(quantity);
 
         Price price = new Price();
         item.setPrice(price);
 
-        price.setValue(doubleTypeConverter.valueOf(eCommerceLineItem.getPrice() * eCommerceLineItem.getQuantity()) - refundPrice - suggestedRefund);
+        price.setValue(doubleTypeConverter.valueOf(eCommerceLineItem.getPrice() * overrideLineQuantity) - refundPrice - suggestedRefund);
         price.setCurrency("INR");
 
 
@@ -1550,17 +1578,17 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 returnReference.setId((String) r.get("id"));
                 returnReference.setReturnStatus(ReturnStatus.convertor.valueOf((String) r.get("status")));
                 returnReference.setItems(becknItemsReturned);
+                returnReference.setCreatedAt(new Date());
+                if (lastKnownOrder.getReturns() == null){
+                    lastKnownOrder.setReturns(new Returns());
+                }
+                lastKnownOrder.getReturns().add(returnReference);
+                LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).sync(request.getContext().getTransactionId(),lastKnownOrder);
             }
         }
 
         reply.setMessage(new Message());
         Order current = getStatus(input);
-        if (returnReference != null){
-            if (current.getReturns() == null){
-                current.setReturns(new Returns());
-            }
-            current.getReturns().add(returnReference);
-        }
         if (ObjectUtil.equals(update_target, "billing")) {
             SettlementDetails newDetails = input.getPayment().getSettlementDetails();
             SettlementDetails settlementDetails = current.getPayment().getSettlementDetails();

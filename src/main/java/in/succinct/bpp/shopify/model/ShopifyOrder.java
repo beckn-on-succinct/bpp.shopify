@@ -13,6 +13,7 @@ import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.IssueSubCategory;
+import in.succinct.beckn.Order.Return;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.ReturnReasons.ReturnReasonCode;
 import in.succinct.beckn.Tag;
@@ -1014,12 +1015,20 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("status",status);
         }
 
-        public int getAmount(){
-            return getInteger("amount");
+        public double getAmount(){
+            return getDouble("amount");
         }
-        public void setAmount(int amount){
+        public void setAmount(double amount){
             set("amount",amount);
         }
+
+        public String getCurrency(){
+            return get("currency");
+        }
+        public void setCurrency(String currency){
+            set("currency",currency);
+        }
+
     }
 
 
@@ -1097,7 +1106,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 setLineItemId(Long.parseLong(lineItem.getId()));
                 setQuantity(quantity);
 
-                double loss = (lineItem.getPrice()/lineItem.getQuantity())* quantity;
+                double loss = lineItem.getPrice() * quantity;
 
                 if (returnReasonCode != null){
                     if (returnReasonCode.getIssueSubCategory() == IssueSubCategory.ITEM_QUALITY || loss < config.getMaxWriteOffAmountToAvoidRTO()) {
@@ -1138,6 +1147,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 set("quantity",quantity);
             }
 
+
+            public String getReturnId(){
+                return get("return_id");
+            }
+            public void setReturnId(String return_id){
+                set("return_id",return_id);
+            }
 
         }
 

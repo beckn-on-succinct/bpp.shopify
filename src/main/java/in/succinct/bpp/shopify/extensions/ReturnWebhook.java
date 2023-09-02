@@ -1,6 +1,7 @@
 package in.succinct.bpp.shopify.extensions;
 
 import com.venky.core.string.StringUtil;
+import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
 import in.succinct.beckn.Context;
@@ -19,6 +20,7 @@ import org.json.simple.JSONValue;
 
 import java.util.Date;
 import java.util.UUID;
+import java.util.logging.Logger;
 
 public class ReturnWebhook extends ShopifyWebhook {
     static {
@@ -27,6 +29,9 @@ public class ReturnWebhook extends ShopifyWebhook {
 
     public void hook(ECommerceAdaptor eCommerceAdaptor, NetworkAdaptor networkAdaptor,Path path, String payload) {
         String event = path.parameter();
+        /*if (ObjectUtil.equals(path.getHeaders().get("X-Shopify-Topic"),"returns/request")) {
+            event = "on_update"; // If On_update is delayed.!!
+        }*/
 
         JSONObject eReturn = (JSONObject) JSONValue.parse(payload);
 
