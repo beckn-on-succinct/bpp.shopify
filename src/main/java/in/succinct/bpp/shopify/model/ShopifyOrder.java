@@ -13,10 +13,9 @@ import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.IssueSubCategory;
-import in.succinct.beckn.Order.Return;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.ReturnReasons.ReturnReasonCode;
-import in.succinct.beckn.Tag;
+import in.succinct.beckn.TagGroups;
 import in.succinct.bpp.core.db.model.ProviderConfig;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
 import in.succinct.bpp.shopify.model.Products.Metafield;
@@ -539,7 +538,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("code",code);
         }
     }
-    public static class  NoteAttributes extends BecknObjects<Tag> {
+    public static class  NoteAttributes extends TagGroups {
 
     }
     public static class LineItem extends BecknObject{

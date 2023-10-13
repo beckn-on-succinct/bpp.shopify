@@ -2,6 +2,7 @@ package in.succinct.bpp.shopify.adaptor;
 
 import com.venky.cache.Cache;
 import com.venky.cache.UnboundedCache;
+import com.venky.core.date.DateUtils;
 import com.venky.core.math.DoubleHolder;
 import com.venky.core.math.DoubleUtils;
 import com.venky.core.string.StringUtil;
@@ -21,7 +22,6 @@ import com.venky.swf.sql.Expression;
 import com.venky.swf.sql.Operator;
 import com.venky.swf.sql.Select;
 import in.succinct.beckn.Address;
-import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.Billing;
 import in.succinct.beckn.BreakUp;
@@ -34,7 +34,10 @@ import in.succinct.beckn.Contact;
 import in.succinct.beckn.Descriptor;
 import in.succinct.beckn.Document;
 import in.succinct.beckn.Documents;
+import in.succinct.beckn.Error;
+import in.succinct.beckn.Error.Type;
 import in.succinct.beckn.Fulfillment;
+import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Fulfillment.FulfillmentType;
 import in.succinct.beckn.FulfillmentStop;
 import in.succinct.beckn.Images;
@@ -42,6 +45,7 @@ import in.succinct.beckn.Item;
 import in.succinct.beckn.Item.PackagedCommodity;
 import in.succinct.beckn.Item.PrepackagedFood;
 import in.succinct.beckn.Item.VeggiesFruits;
+import in.succinct.beckn.ItemQuantity;
 import in.succinct.beckn.Items;
 import in.succinct.beckn.Location;
 import in.succinct.beckn.Locations;
@@ -71,14 +75,18 @@ import in.succinct.beckn.ReturnReasons.ReturnReasonCode;
 import in.succinct.beckn.SellerException;
 import in.succinct.beckn.SellerException.CancellationNotPossible;
 import in.succinct.beckn.SellerException.GenericBusinessError;
+import in.succinct.beckn.SellerException.ItemQuantityUnavailable;
 import in.succinct.beckn.SellerException.OrderConfirmFailure;
 import in.succinct.beckn.SettlementDetail;
 import in.succinct.beckn.SettlementDetail.SettlementCounterparty;
 import in.succinct.beckn.SettlementDetail.SettlementPhase;
 import in.succinct.beckn.SettlementDetail.SettlementType;
 import in.succinct.beckn.SettlementDetails;
-import in.succinct.beckn.Tag;
+import in.succinct.beckn.TagGroup;
+import in.succinct.beckn.TagGroups;
 import in.succinct.beckn.Tags;
+import in.succinct.beckn.Time;
+import in.succinct.beckn.Time.Range;
 import in.succinct.beckn.User;
 import in.succinct.bpp.core.adaptor.TimeSensitiveCache;
 import in.succinct.bpp.core.adaptor.api.BecknIdHelper;
@@ -116,14 +124,13 @@ import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLines;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Transaction;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Transactions;
 import in.succinct.bpp.shopify.model.Store;
+import in.succinct.json.JSONAwareWrapper;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -150,7 +157,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
 
     public String getBecknTransactionId(ShopifyOrder draftOrder){
-       for (Tag noteAttribute : draftOrder.getNoteAttributes()) {
+       for (TagGroup noteAttribute : draftOrder.getNoteAttributes()) {
             if (noteAttribute.getName().equals("context.transaction_id")){
                 return noteAttribute.getValue();
             }
@@ -159,7 +166,9 @@ public class ECommerceAdaptor extends SearchAdaptor {
     }
 
 
-    public Order initializeDraftOrder(Request request) {
+    @Override
+    public void init(Request request, Request reply) {
+
         ShopifyOrder shopifyOrder = new ShopifyOrder();
         Order bo = request.getMessage().getOrder();
         fixFulfillment(request.getContext(), bo);
@@ -179,8 +188,8 @@ public class ECommerceAdaptor extends SearchAdaptor {
         shopifyOrder.setName("beckn-" + request.getContext().getTransactionId());
         shopifyOrder.setNoteAttributes(new NoteAttributes());
 
-        for (String key : new String[]{"bap_id", "bap_uri", "domain", "transaction_id", "city", "country", "core_version"}) {
-            Tag meta = new Tag();
+        for (String key : new String[]{"bap_id", "bap_uri", "domain", "transaction_id", "city", "country", "core_version" , "ttl" }) {
+            TagGroup meta = new TagGroup();
             meta.setName(String.format("context.%s", key));
             meta.setValue(request.getContext().get(key));
             shopifyOrder.getNoteAttributes().add(meta);
@@ -237,9 +246,10 @@ public class ECommerceAdaptor extends SearchAdaptor {
         if (bo.getItems() != null) {
             bo.getItems().forEach(boItem -> {
                 in.succinct.bpp.search.db.model.Item dbItem = getItem(boItem.getId());
-                if (dbItem == null || !dbItem.isActive()){
+                if (dbItem == null){
                     return;
                 }
+
                 Item refreshedBoItem = new Item(dbItem.getObjectJson());
                 JSONObject inspectQuantity = (JSONObject) boItem.getInner().get("quantity");
                 if (inspectQuantity.containsKey("count")){
@@ -247,27 +257,49 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 }else {
                     refreshedBoItem.setItemQuantity(boItem.getItemQuantity());
                 }
-                LineItem lineItem = addItem(shopifyOrder, refreshedBoItem);
-                lineItem.setTaxLines(new TaxLines());
 
-                double linePrice = refreshedBoItem.getPrice().getValue() * lineItem.getQuantity();
-                double taxRate = doubleTypeConverter.valueOf(refreshedBoItem.getTags().get("tax_rate"))/100.0;
-                double lineTax = linePrice * (isTaxIncludedInPrice() ? taxRate/(1.0+taxRate) : taxRate);
-                totalPrice.increment(linePrice);
-                tax.increment(lineTax);
+                if (!dbItem.isActive()){
+                    ItemQuantityUnavailable ex = new SellerException.ItemQuantityUnavailable() ;
+                    Error error = new Error();
+                    error.setCode(ex.getErrorCode());
+                    error.setMessage(ex.getMessage());
+                    error.setType(Type.DOMAIN_ERROR);
+                    reply.setError(error);
+                    Quantity zero = new Quantity();
+                    zero.setCount(0);
+                    if (inspectQuantity.containsKey("count")){
+                        refreshedBoItem.setQuantity(zero);
+                        boItem.setQuantity(refreshedBoItem.getQuantity());
+                    }else {
+                        refreshedBoItem.setItemQuantity(new ItemQuantity());
+                        refreshedBoItem.getItemQuantity().setAvailable(zero);
+                        refreshedBoItem.getItemQuantity().setMaximum(zero);
+                        refreshedBoItem.getItemQuantity().setSelected(zero);
+                        boItem.setItemQuantity(refreshedBoItem.getItemQuantity());
+                    }
+                }else {
+                    LineItem lineItem = addItem(shopifyOrder, refreshedBoItem);
+                    lineItem.setTaxLines(new TaxLines());
 
-                String[] taxHeads = new String[] {"IGST"};
-                if (ObjectUtil.equals(getProviderConfig().getLocation().getAddress().getState(), shopifyOrder.getShippingAddress().getAddress().getState())){
-                    taxHeads = new String[] { "SGST","CGST"};
-                }
-                int numHeads = taxHeads.length;
-                for (String head : taxHeads ){
-                    TaxLine taxLine = new TaxLine();
-                    taxLine.setPrice(lineTax/numHeads);
-                    taxLine.setRate(taxRate/numHeads);
-                    taxLine.setTitle(head);
-                    lineItem.getTaxLines().add(taxLine);
+                    double linePrice = refreshedBoItem.getPrice().getValue() * lineItem.getQuantity();
+                double taxRate = doubleTypeConverter.valueOf(refreshedBoItem.getTaxRate())/100.0;
+                    double lineTax = linePrice * (isTaxIncludedInPrice() ? taxRate / (1.0 + taxRate) : taxRate);
+                    totalPrice.increment(linePrice);
+                    tax.increment(lineTax);
 
+                    String[] taxHeads = new String[]{"IGST"};
+                    if (ObjectUtil.equals(getProviderConfig().getLocation().getAddress().getState(), shopifyOrder.getShippingAddress().getAddress().getState())) {
+                        taxHeads = new String[]{"SGST", "CGST"};
+                    }
+                    int numHeads = taxHeads.length;
+                    for (String head : taxHeads) {
+                        TaxLine taxLine = new TaxLine();
+                        taxLine.setPrice(lineTax / numHeads);
+                        taxLine.setRate(taxRate / numHeads);
+                        taxLine.setTitle(head);
+                        lineItem.getTaxLines().add(taxLine);
+
+                    }
                 }
 
             });
@@ -286,7 +318,17 @@ public class ECommerceAdaptor extends SearchAdaptor {
             }});
         }
 
-        return saveDraftOrder(shopifyOrder);
+        LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).sync(request.getContext().getTransactionId(),bo);
+        Order order = bo;
+        if (!shopifyOrder.getLineItems().isEmpty()){
+            order =  saveDraftOrder(shopifyOrder);
+            if (bo.getCreatedAt() != null ){
+                order.setCreatedAt(bo.getCreatedAt());
+            }
+        }
+
+        reply.setMessage(new Message());
+        reply.getMessage().setOrder(order);
     }
 
     private void delete(ShopifyOrder draftOrder) {
@@ -322,7 +364,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         lineItem.setProductId(doubleTypeConverter.valueOf(item.getTags().get("product_id")).longValue());
         lineItem.setRequiresShipping(true);
-        lineItem.setTaxable(doubleTypeConverter.valueOf(item.getTags().get("tax_rate")) > 0);
+        lineItem.setTaxable(doubleTypeConverter.valueOf(item.getTaxRate()) > 0);
         line_items.add(lineItem);
         return lineItem;
     }
@@ -507,8 +549,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
             throw new CancellationNotPossible(error);
         }
         ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
-        Order ret=  getBecknOrder(eCommerceOrder);
-        return ret;
+        return getBecknOrder(eCommerceOrder);
     }
 
     @Override
@@ -556,7 +597,8 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 Location location = new Location();
                 location.setId(BecknIdHelper.getBecknId(StringUtil.valueOf(store.get("id")), getSubscriber(), Entity.provider_location));
                 location.setAddress(new Address());
-                location.getAddress().setName((String) store.get("name"));
+                location.getAddress().setName(getProviderConfig().getStoreName());
+                //  location.getAddress().setName((String) store.get("name"));
                 location.getAddress().setStreet((String)store.get("address1"));
                 location.getAddress().setLocality((String)store.get("address2"));
                 location.getAddress().setCity((String) store.get("city"));
@@ -570,6 +612,8 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 location.getCountry().setCode(location.getAddress().getCountry());
                 */
                 location.setTime(getProviderConfig().getTime());
+                location.getTime().setLabel("enabled");
+                location.getTime().setTimestamp(new Date());
                 location.setDescriptor(new Descriptor());
                 location.getDescriptor().setName(location.getAddress().getName());
 
@@ -578,7 +622,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 JSONArray metafields = (JSONArray) meta.get("metafields");
                 for (Object metafield : metafields){
                     JSONObject m = (JSONObject) metafield;
-                    locationMeta.put((String)m.get("key"),(String)m.get("value"));
+                    locationMeta.put((String)m.get("key"),String.valueOf(m.get("value")));
                 }
                 location.setGps(new GeoCoordinate(new BigDecimal(locationMeta.get("lat")),new BigDecimal(locationMeta.get("lng"))));
                 locations.add(location);
@@ -655,32 +699,26 @@ public class ECommerceAdaptor extends SearchAdaptor {
                         if (image != null) {
                             descriptor.getImages().add(image.getSrc());
                         }
-                    } else if (productImages.size() > 0) {
-                        for (ProductImage i : productImages) {
-                            descriptor.getImages().add(i.getSrc());
+                    } else if (!productImages.isEmpty()) {
+                        for (Iterator<ProductImage> i = productImages.iterator() ; i.hasNext() && descriptor.getImages().size() < 3; ) {
+                            ProductImage image = i.next();
+                            descriptor.getImages().add(image.getSrc());
                         }
                     }
                     descriptor.setSymbol(descriptor.getImages().get(0));
 
                     item.setCategoryId(getProviderConfig().getCategory().getId());
-                    item.setCategoryIds(new BecknStrings());
-                    item.getCategoryIds().add(item.getCategoryId());
-                    item.setTags(new Tags());
+                    //item.setCategoryIds(new BecknStrings());
+                    //item.getCategoryIds().add(item.getCategoryId());
 
                     for (String tag: product.getTagSet()) {
-                        item.getTags().set(tag, "true");
+                        item.setTag("general_attributes",tag,true);
                     }
-                    item.getTags().set("hsn_code", inventoryItem.getHarmonizedSystemCode());
-                    item.getTags().set("country_of_origin", inventoryItem.getCountryCodeOfOrigin());
-                    item.getTags().set("tax_rate", StringUtil.valueOf(taxRateMap.get(inventoryItem.getHarmonizedSystemCode())));
-                    item.getTags().set("product_id", variant.getProductId());
-                    if (product.isVeg()) {
-                        item.getTags().set("veg", "yes");
-                        item.getTags().set("non_veg", "no");
-                    }else {
-                        item.getTags().set("veg", "no");
-                        item.getTags().set("non_veg", "yes");
-                    }
+                    item.setTag("general_attributes","product_id", variant.getProductId());
+                    item.setHsnCode(inventoryItem.getHarmonizedSystemCode());
+                    item.setTaxRate(taxRateMap.get(inventoryItem.getHarmonizedSystemCode()));
+                    item.setCountryOfOrigin(Country.findByISO(inventoryItem.getCountryCodeOfOrigin()).getIsoCode());
+                    item.setVeg(product.isVeg());
 
 
 
@@ -689,21 +727,28 @@ public class ECommerceAdaptor extends SearchAdaptor {
                     item.getLocationIds().add(item.getLocationId());
 
                     /* Yhis should be abtracted out TODO */
-                    if (getProviderConfig().getCategory().getDescriptor().getName().equals("Fruits and Vegetables")) {
+
+
+                    if (VeggiesFruits.CategoryNames.contains(getProviderConfig().getCategory().getDescriptor().getName())) {
                         item.setVeggiesFruits(new VeggiesFruits());
                         item.getVeggiesFruits().setNetQuantity(variant.getGrams() + " gms");
-                    }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Foods")) {
+                    }else if (PrepackagedFood.CategoryNames.contains(getProviderConfig().getCategory().getDescriptor().getName())) {
                         item.setPrepackagedFood(new PrepackagedFood());
                         item.getPrepackagedFood().setNetQuantity(variant.getGrams() + " gms");
                         item.getPrepackagedFood().setBrandOwnerAddress(getProviderConfig().getLocation().getAddress().flatten());
                         item.getPrepackagedFood().setBrandOwnerName(getProviderConfig().getFulfillmentProviderName());
                         item.getPrepackagedFood().setBrandOwnerFSSAILicenseNo(getProviderConfig().getFssaiRegistrationNumber());
-                    }else if (getProviderConfig().getCategory().getDescriptor().getName().equals("Packaged Commodities")) {
+                    }else if (PackagedCommodity.CategoryNames.contains(getProviderConfig().getCategory().getDescriptor().getName())) {
                         item.setPackagedCommodity(new PackagedCommodity());
                         item.getPackagedCommodity().setNetQuantityOrMeasureOfCommodityInPkg(variant.getGrams() + " gms");
                         item.getPackagedCommodity().setManufacturerOrPackerName(getProviderConfig().getFulfillmentProviderName());
                         item.getPackagedCommodity().setManufacturerOrPackerAddress(getProviderConfig().getLocation().getAddress().flatten());
                         item.getPackagedCommodity().setCommonOrGenericNameOfCommodity(product.getProductType());
+                        if (inventoryItem.getCountryCodeOfOrigin() != null) {
+                            item.getPackagedCommodity().setImportedProductCountryOfOrigin(Country.findByISO(inventoryItem.getCountryCodeOfOrigin()).getIsoCode());
+                        }
+                        item.getPackagedCommodity().setMonthYearOfManufacturePackingImport("Please refer to the packaging of the product");
+
                         //For statutory requirements show images.
                     }
 
@@ -717,6 +762,17 @@ public class ECommerceAdaptor extends SearchAdaptor {
                     price.setValue(variant.getPrice());
                     price.setOfferedValue(variant.getPrice());
                     price.setCurrency("INR");
+
+                    double taxRate = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter().valueOf(item.getTaxRate())/100.0;
+                    Price unitTax = new Price();
+                    unitTax.setCurrency("INR");
+                    double factor = isTaxIncludedInPrice() ? (taxRate/(1 + taxRate)) : taxRate ;
+
+                    unitTax.setValue(factor * item.getPrice().getValue());
+                    unitTax.setListedValue(factor  * item.getPrice().getListedValue());
+                    unitTax.setOfferedValue(factor * item.getPrice().getOfferedValue());
+                    item.setTax(unitTax);
+
 
                     item.setPaymentIds(new BecknStrings());
                     for (Payment payment : getSupportedPaymentCollectionMethods()) {
@@ -732,10 +788,13 @@ public class ECommerceAdaptor extends SearchAdaptor {
                     }
 
                     item.setCancellable(true);
-                    item.setTimeToShip(getProviderConfig().getTurnAroundTime());
+                    item.setTimeToShip(getProviderConfig().getTimeToShip());
                     item.setAvailableOnCod(getProviderConfig().isCodSupported());
 
-                    item.setContactDetailsConsumerCare(getProviderConfig().getLocation().getAddress().flatten() + " " + getProviderConfig().getSupportContact().flatten());
+                    item.setContactDetailsConsumerCare(String.format("%s,%s,%s",
+                            getProviderConfig().getLocation().getAddress().getName() ,
+                            getProviderConfig().getSupportContact().getEmail() ,
+                            getProviderConfig().getSupportContact().getPhone()));
                     item.setFulfillmentIds(new BecknStrings());
                     for (Fulfillment fulfillment : getFulfillments()) {
                         item.getFulfillmentIds().add(fulfillment.getId());
@@ -937,13 +996,14 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
     public Order getBecknOrder(ShopifyOrder eCommerceOrder) {
         String transactionId = getBecknTransactionId(eCommerceOrder);
-        LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).setLocalOrderId(transactionId,eCommerceOrder.getId());
-        Order lastReturnedOrderJson = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLastKnownOrder(transactionId);
-
-
+        LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber());
+        localOrderSynchronizer.setLocalOrderId(transactionId,eCommerceOrder.getId());
+        Order lastReturnedOrderJson = localOrderSynchronizer.getLastKnownOrder(transactionId);
 
         Order order = new Order();
         order.update(lastReturnedOrderJson);
+        order.setFulfillments(new in.succinct.beckn.Fulfillments());
+
         if (order.getPayment() == null){
             order.setPayment(new Payment());
         }
@@ -962,15 +1022,33 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         eCommerceOrder.loadMetaFields(helper);
 
+        Date updatedAt = eCommerceOrder.getUpdatedAt();
+
+        localOrderSynchronizer.setFulfillmentStatusReachedAt(transactionId,eCommerceOrder.getFulfillmentStatus(),updatedAt,false);
+        localOrderSynchronizer.setStatusReachedAt(transactionId,eCommerceOrder.getStatus(),updatedAt,false);
+
+        List<FulfillmentStatusAudit> fulfillmentStatusAudits = localOrderSynchronizer.getFulfillmentStatusAudit(transactionId);
+        Map<FulfillmentStatus,Date> auditMap = new HashMap<>();
+
+        for (FulfillmentStatusAudit a : fulfillmentStatusAudits){
+            auditMap.put(a.getFulfillmentStatus(),a.getDate());
+            if (updatedAt.compareTo(a.getDate()) < 0){
+                updatedAt = a.getDate();
+            }
+        }
+
+        order.setUpdatedAt(DateUtils.max(updatedAt,order.getUpdatedAt()));
+
+
+
         Bucket orderRefundAmount = new Bucket();
         Map<String,Map<String,Item>> returnedItems = getReturnedItems(order);
-        Map<String,Return> refundReturnMap = new HashMap<>(){{
-            for (Return aReturn : order.getReturns()) {
-                if (!ObjectUtil.isVoid(aReturn.getRefundId())) {
-                    put(aReturn.getRefundId(), aReturn);
-                }
+        Map<String,Return> refundReturnMap = new HashMap<>();
+        for (Return aReturn : order.getReturns()) {
+            if (!ObjectUtil.isVoid(aReturn.getRefundId())) {
+                refundReturnMap.put(aReturn.getRefundId(), aReturn);
             }
-        }};
+        }
 
         Map<String,RefundLineItems> refundLineItemsMap = new UnboundedCache<String, RefundLineItems>() {
             @Override
@@ -1012,27 +1090,20 @@ public class ECommerceAdaptor extends SearchAdaptor {
         order.setQuote(quote);
         quote.setTtl(15*60);
         quote.setPrice(new Price());
-        quote.getPrice().setValue(order.getPayment().getParams().getAmount());
-        quote.getPrice().setCurrency(order.getPayment().getParams   ().getCurrency());
 
         quote.setBreakUp(new BreakUp());
-        Price productPrice = new Price(); productPrice.setValue(eCommerceOrder.getSubtotalPrice()); productPrice.setCurrency("INR");
-        Price tax = new Price(); tax.setValue(eCommerceOrder.getTotalTax()); tax.setCurrency("INR");
-        Price total = new Price(); total.setValue(eCommerceOrder.getTotalPrice());total.setCurrency("INR");
+        //Price productPrice = new Price(); productPrice.setValue(eCommerceOrder.getSubtotalPrice()); productPrice.setCurrency("INR");
+        //Price total = new Price(); total.setValue(eCommerceOrder.getTotalPrice());total.setCurrency("INR");
         Price shippingPrice = new Price();shippingPrice.setCurrency("INR");
         if (eCommerceOrder.getShippingLine() != null) {
             shippingPrice.setValue(eCommerceOrder.getShippingLine().getPrice());
         }
 
 
-        BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.tax,"Tax",tax);
-        element.setItemId(fulfillmentId);
-        if (!isTaxIncludedInPrice()) {
-            quote.getBreakUp().add(element);
-        }
+
 
         if (shippingPrice.getValue() > 0) {
-            element = quote.getBreakUp().createElement(BreakUpCategory.delivery, "Delivery Charges", shippingPrice);
+            BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.delivery, "Delivery Charges", shippingPrice);
             element.setItemId(fulfillmentId);
             quote.getBreakUp().add(element);
         }
@@ -1040,14 +1111,14 @@ public class ECommerceAdaptor extends SearchAdaptor {
         //Delivery is included
 
 
-        setBilling(order,eCommerceOrder.getBillingAddress());
+        setBilling(order,eCommerceOrder);
         //order.setId(meta.getBapOrderId());
 
         if (!ObjectUtil.isVoid(eCommerceOrder.getInvoiceUrl())) {
             order.setDocuments(new Documents());
             Document invoice = new Document();
             order.getDocuments().add(invoice);
-            invoice.setLabel("invoice");
+            invoice.setLabel("Invoice");
             invoice.setUrl(eCommerceOrder.getInvoiceUrl());
         }
 
@@ -1057,22 +1128,29 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         eCommerceOrder.getLineItems().forEach(lineItem -> {
             //item.setFulfillmentId(lastReturnedOrderJson.getFulfillment().getId());
-            Item item = createItemFromECommerceLineItem(lineItem,refundLineItemsMap, order.getReturns(), fulfillmentId);
-            if (item.getQuantity().getCount() > 0 ) {
-                order.getItems().add(item);
+            final Item unitItem = createItemFromECommerceLineItem(lineItem,refundLineItemsMap, order.getReturns(), fulfillmentId);
+            if (unitItem.getQuantity().getCount() > 0 ) {
+                order.getItems().add(unitItem);
             }
-            addToQuote(quote,item);
+            addToQuote(quote,unitItem);
 
             String itemId = BecknIdHelper.getBecknId(String.valueOf(lineItem.getVariantId()), getSubscriber(), Entity.item);
             returnedItems.get(itemId).forEach((returnId,ri)->{
+                ri.getTags().setInner(unitItem.getTags().getInner());
                 Return returnReference = order.getReturns().get(returnId);
-                if (returnReference.getRefund() == null ) {
+                if (!returnReference.isRefunded()) {
+                    addToQuote(quote, ri);
                     order.getItems().add(ri);
+                    if (ri.getFulfillmentId() != null){
+                        if (ObjectUtil.equals(returnReference.getFulfillment().getId(),ri.getFulfillmentId())) {
+                            order.getFulfillments().add(returnReference.getFulfillment(), true);
+                        }
+                    }
                 }
             });
 
             for (RefundLineItem refundedLineItem : refundLineItemsMap.get(lineItem.getId())) {
-                    item = createItemFromECommerceLineItem(refundedLineItem.getLineItem(), new UnboundedCache<>() {
+                    Item refundedUnitItem = createItemFromECommerceLineItem(refundedLineItem.getLineItem(), new UnboundedCache<>() {
                         @Override
                         protected RefundLineItems getValue(String s) {
                             return new RefundLineItems();
@@ -1080,35 +1158,44 @@ public class ECommerceAdaptor extends SearchAdaptor {
                     }, new Returns(), null, refundedLineItem.getQuantity());
 
                     //}, fulfillmentId);
-
-                    if (refundedLineItem.getReturnId() != null){
-                        item.setTags(order.getReturns().get(refundedLineItem.getReturnId()).getItems().get(item.getId()).getTags());
-                    }
-                    Tags tags = item.getTags();
-                    if (tags == null) {
-                        item.setTags(new Tags());
-                    }
+                    Return r =  refundedLineItem.getReturnId() != null ?  order.getReturns().get(refundedLineItem.getReturnId()) : null ;
+                    refundedUnitItem.setTags(r == null ? new TagGroups() : r.getItems().get(refundedUnitItem.getId()).getTags());
 
                     switch (refundedLineItem.getRestockType()) {
                         case "cancel":
-                            item.getTags().set("status", "Cancelled");
+                            refundedUnitItem.getTags().set("status", "Cancelled");
                             break;
                         case "no_restock":
                             if (refundedLineItem.getReturnId() != null) {
-                                item.getTags().set("status", "Liquidated");
+                                refundedUnitItem.getTags().set("status", "Liquidated");
                             }else {
-                                item.getTags().set("status", "Cancelled");
+                                refundedUnitItem.getTags().set("status", "Cancelled");
                             }
                             break;
                         case "return":
-                            item.getTags().set("status", "Return_Delivered");
+                            refundedUnitItem.getTags().set("status", "Return_Delivered");
+                            refundedUnitItem.setFulfillmentId(r == null ? null : String.format("reverse/%s/%s", FulfillmentType.return_to_origin, r.getReturnMessageId()));
                             break;
                     }
-
-                    order.getItems().add(item);
+                    if (refundedUnitItem.getFulfillmentId() != null && r != null){
+                        order.getFulfillments().add(r.getFulfillment(),true);
+                    }
+                    order.getItems().add(refundedUnitItem);
                 }
                 //addToQuote(quote,item); No need to add to quote
         });
+
+
+        quote.getPrice().setCurrency(order.getPayment().getParams   ().getCurrency());
+
+        Bucket total = new Bucket();
+        for (BreakUpElement element1 : quote.getBreakUp()) {
+            total.increment(element1.getPrice().getValue() );
+        }
+
+        quote.getPrice().setValue(total.doubleValue());
+        /** Recompute quote based on returned products. */
+
 
         ShopifyOrder.Address shipping = eCommerceOrder.getShippingAddress();
         if (shipping == null || ObjectUtil.isVoid(shipping.getAddress1())){
@@ -1120,24 +1207,49 @@ public class ECommerceAdaptor extends SearchAdaptor {
         order.setProviderLocation(providerLocation);
 
 
-        fulfillment.setStart(new FulfillmentStop());
-        fulfillment.getStart().setLocation(providerLocation);
-        fulfillment.setProviderId(String.format("%s/logistics",getSubscriber().getAppId()));
-
-
         fulfillment.setFulfillmentStatus(eCommerceOrder.getFulfillmentStatus());
-        fulfillment.setEnd(new FulfillmentStop());
-        if (lastReturnedOrderJson.getFulfillment().getEnd() != null) {
-            fulfillment.getEnd().update(lastReturnedOrderJson.getFulfillment().getEnd());
+
+        if (fulfillment.getStart() == null) {
+            fulfillment.setStart(new FulfillmentStop());
+            fulfillment.getStart().setLocation(providerLocation);
+            fulfillment.getStart().setContact(getProviderConfig().getSupportContact());
         }
-        fulfillment.getEnd().setLocation(new Location());
+
+        fulfillment.setProviderId(String.format("%s/logistics",getSubscriber().getSubscriberId()));
+        fulfillment.setProviderName(getProviderConfig().getFulfillmentProviderName());
+
+
+        if (fulfillment.getEnd() == null) {
+            fulfillment.setEnd(new FulfillmentStop());
+            if (lastReturnedOrderJson .getFulfillment() != null && lastReturnedOrderJson.getFulfillment().getEnd() != null) {
+                fulfillment.getEnd().update(lastReturnedOrderJson.getFulfillment().getEnd());
+            }
+        }
+        if (fulfillment.getEnd().getLocation() == null) {
+            fulfillment.getEnd().setLocation(new Location());
+        }
         if (fulfillment.getEnd().getLocation().getAddress() == null) {
             fulfillment.getEnd().getLocation().setAddress(shipping.getAddress());
         }
+        if (fulfillment.getEnd().getLocation().getGps() == null) {
+            fulfillment.getEnd().getLocation().setGps(new GeoCoordinate(shipping.getLatitude(), shipping.getLongitude()));
+        }
+        if (fulfillment.getEnd().getContact() == null) {
+            fulfillment.getEnd().setContact(new Contact());
+            fulfillment.getEnd().getContact().setPhone(shipping.getPhone());
+            fulfillment.getEnd().getContact().setEmail(eCommerceOrder.getEmail());
+        }
+        planFulfillment(order);
 
-        fulfillment.getEnd().setContact(new Contact());
-        fulfillment.getEnd().getContact().setPhone(shipping.getPhone());
-        fulfillment.getEnd().getContact().setEmail(eCommerceOrder.getEmail());
+        if (auditMap.containsKey(FulfillmentStatus.Order_picked_up)){
+            fulfillment.getStart().getTime().setTimestamp(auditMap.get(FulfillmentStatus.Order_picked_up));
+        }
+
+        if (auditMap.containsKey(FulfillmentStatus.Order_delivered)){
+            fulfillment.getEnd().getTime().setTimestamp(auditMap.get(FulfillmentStatus.Order_delivered));
+        }
+
+
         fulfillment.setContact(getProviderConfig().getSupportContact());
 
 
@@ -1146,18 +1258,20 @@ public class ECommerceAdaptor extends SearchAdaptor {
         fulfillment.getCustomer().setPerson(new Person());
         fulfillment.getCustomer().getPerson().setName(address.getName());
 
-        order.setFulfillments( new in.succinct.beckn.Fulfillments());
         order.getFulfillments().add(fulfillment);
 
         order.setProvider(new Provider());
-        order.getProvider().setId(getSubscriber().getAppId());
+        order.getProvider().setId(getSubscriber().getSubscriberId());
         order.getProvider().setDescriptor(new Descriptor());
         order.getProvider().getDescriptor().setName(getProviderConfig().getStoreName());
         order.getProvider().setCategoryId(getProviderConfig().getCategory().getId());
+        order.getProvider().setLocations(new Locations());
+        order.getProvider().getLocations().add(order.getProviderLocation());
 
+        if (lastReturnedOrderJson.getCreatedAt() == null) {
+            order.setCreatedAt(eCommerceOrder.getCreatedAt());
+        }
 
-        order.setCreatedAt(eCommerceOrder.getCreatedAt());
-        order.setUpdatedAt(eCommerceOrder.getUpdatedAt());
 
 
         Tags tags = order.getTags();
@@ -1166,11 +1280,13 @@ public class ECommerceAdaptor extends SearchAdaptor {
             tags = new Tags();
             order.setTags(tags);
         }
-        Cancellation cancellation = order.getCancellation();
+        Cancellation cancellation = lastReturnedOrderJson.getCancellation();
         Option selectedReason = cancellation == null ? null : cancellation.getSelectedReason();
         Descriptor descriptor = selectedReason == null ? null : selectedReason.getDescriptor();
         order.getTags().set("cancellation_reason_id", descriptor == null ? null : descriptor.getCode());
-
+        if (cancellation != null) {
+            order.setState(Status.Cancelled);
+        }
 
         if (order.getState() == Status.Cancelled){
             if (order.getCancellation() == null) {
@@ -1208,6 +1324,32 @@ public class ECommerceAdaptor extends SearchAdaptor {
         return order;
     }
 
+    private void planFulfillment(Order order) {
+        if (order.getCreatedAt() == null){
+            return;
+        }
+        Fulfillment fulfillment  = order.getFulfillment();
+        Time startTime = fulfillment.getStart().getTime();
+        if (startTime == null){
+            startTime = new Time();
+            Range range = new Range();
+            startTime.setRange(range);
+            range.setStart(order.getCreatedAt());
+            range.setEnd(DateUtils.addHours(order.getCreatedAt(),(int)getProviderConfig().getTimeToShip().toHours()));
+            fulfillment.getStart().setTime(startTime);
+        }
+        Time endTime = fulfillment.getEnd().getTime();
+
+        if (endTime == null){
+            endTime = new Time();
+            Range range = new Range();
+            endTime.setRange(range);
+            range.setStart(order.getCreatedAt());
+            range.setEnd(DateUtils.addHours(order.getCreatedAt(),(int)getProviderConfig().getFulfillmentTurnAroundTime().toHours()));
+            fulfillment.getEnd().setTime(endTime);
+        }
+    }
+
     private Map<String, Map<String, Item>> getReturnedItems(Order order) {
         Map<String,Map<String,Item>> returnedItems  = new UnboundedCache<String, Map<String, Item>>() {
             @Override
@@ -1226,22 +1368,27 @@ public class ECommerceAdaptor extends SearchAdaptor {
         for (Return r : order.getReturns()) {
             for (Item ri : r.getItems()) {
                 if (ri.getTags() == null){
-                    ri.setTags(new Tags());
+                    ri.setTags(new TagGroups());
                 }
                 switch (r.getReturnStatus()){
                     case REQUESTED:
                         ri.getTags().set("status","Return_Initiated");
+                        ri.setFulfillmentId(order.getFulfillment().getId());
                         break;
                     case OPEN:
                         ri.getTags().set("status","Return_Approved");
+                        ri.setFulfillmentId(String.format("reverse/%s/%s",FulfillmentType.return_to_origin,r.getReturnMessageId()));
                         break;
                     case DECLINED:
                     case CANCELED:
                         ri.getTags().set("status","Return_Rejected");
+                        ri.setFulfillmentId(order.getFulfillment().getId());
+                        //ri.setFulfillmentId(String.format("reverse/%s/%s",FulfillmentType.return_to_origin,r.getReturnMessageId()));
                         break;
                     case REFUNDED:
                     case CLOSED:
                         ri.getTags().set("status","Return_Delivered");
+                        ri.setFulfillmentId(String.format("reverse/%s/%s",FulfillmentType.return_to_origin,r.getReturnMessageId()));
                         break;
                 }
                 returnedItems.get(ri.getId()).put(r.getId(),ri);
@@ -1250,27 +1397,49 @@ public class ECommerceAdaptor extends SearchAdaptor {
         return returnedItems;
     }
 
-    private void addToQuote(Quote quote, Item item) {
-        if (item.getQuantity().getCount() > 0){
-            Item quoteItem = new Item();
-            quoteItem.update(item);
-            quoteItem.getPrice().setValue(quoteItem.getPrice().getValue()/quoteItem.getQuantity().getCount()); //Make price unit price
+    private void addToQuote(Quote quote, Item unitItem) {
+        if (unitItem.getQuantity().getCount() > 0){
+            BreakUpElement breakUpElement = quote.getBreakUp().createElement(BreakUpCategory.item,unitItem.getDescriptor().getName(),unitItem.getPrice(),unitItem.getQuantity().getCount()); //quote must have unit price.
+            breakUpElement.setItemQuantity(unitItem.getQuantity());
+            breakUpElement.setItemId(unitItem.getId());
+            quote.getBreakUp().add(breakUpElement);
+
+            if (!isTaxIncludedInPrice()) {
+                BreakUpElement element = quote.getBreakUp().createElement(BreakUpCategory.tax,"Tax",unitItem.getTax(),unitItem.getQuantity().getCount());
+                element.setItemId(unitItem.getId());
+
+                quote.getBreakUp().add(element);
+            }
+
+            Item quoteItem = new Item((JSONObject) JSONAwareWrapper.parse(unitItem.toString()));
+            quoteItem.setFulfillmentId(null);
             quoteItem.setQuantity(null);
 
-            BreakUpElement itemPrice = quote.getBreakUp().createElement(BreakUpCategory.item,item.getDescriptor().getName(),item.getPrice()); //This is line price and not unit price.
 
-            itemPrice.setItemQuantity(item.getQuantity());
-            quote.getBreakUp().add(itemPrice);
 
-            itemPrice.setItem(quoteItem);
-            itemPrice.setItemId(quoteItem.getId());
+            /*
+            Quantity max = new Quantity();max.setCount(getProviderConfig().getMaxOrderQuantity());
+            ItemQuantity quantity = new ItemQuantity();
+            quantity.setSelected(unitItem.getQuantity());
+            quantity.setAvailable(max);
+            quantity.setMaximum(max);
+
+            quoteItem.setItemQuantity(quantity);
+
+             */
+
+            breakUpElement.setItem(quoteItem);
         }
     }
     private Item createItemFromECommerceLineItem(LineItem eCommerceLineItem, Map<String, RefundLineItems> refundedMap, Returns returns, String fulfillmentId){
         return createItemFromECommerceLineItem(eCommerceLineItem,refundedMap,returns,fulfillmentId,doubleTypeConverter.valueOf(eCommerceLineItem.getQuantity()).intValue());
     }
     private Item createItemFromECommerceLineItem(LineItem eCommerceLineItem, Map<String, RefundLineItems> refundedMap, Returns returns, String fulfillmentId, int overrideLineQuantity) {
-        Item item = new Item();
+        Item unitItem = new Item();
+        in.succinct.bpp.search.db.model.Item dbItem = getItem(BecknIdHelper.getBecknId(String.valueOf(eCommerceLineItem.getVariantId()), getSubscriber(), Entity.item));
+        Item itemIndexed  = new Item((JSONObject) JSONAwareWrapper.parse(dbItem.getObjectJson()));
+        unitItem.update(itemIndexed);
+        /*
         item.setDescriptor(new Descriptor());
         item.setId(BecknIdHelper.getBecknId(String.valueOf(eCommerceLineItem.getVariantId()), getSubscriber(), Entity.item));
         item.getDescriptor().setName(eCommerceLineItem.getName());
@@ -1281,31 +1450,24 @@ public class ECommerceAdaptor extends SearchAdaptor {
         item.getDescriptor().setLongDesc(item.getDescriptor().getName());
         item.getDescriptor().setShortDesc(item.getDescriptor().getName());
 
-        in.succinct.bpp.search.db.model.Item dbItem = getItem(item.getId());
 
-        Item itemIndexed  = new Item(dbItem.getObjectJson());
         item.setTags(itemIndexed.getTags());
         item.setCategoryId(itemIndexed.getCategoryId());
         item.setCategoryIds(itemIndexed.getCategoryIds());
         item.setCancellable(itemIndexed.isCancellable());
-
+        */
         Quantity quantity = new Quantity();
 
         int refundQty = 0;
-        double refundPrice = 0;
         for (RefundLineItem lineItem : refundedMap.get(eCommerceLineItem.getId())) {
             refundQty += lineItem.getQuantity();
-            refundPrice+= ( lineItem.getLineItem().getPrice() * lineItem.getQuantity());
         }
 
         int returnProcessingQty = 0 ;
-        double suggestedRefund = 0;
         for (Return r  : returns){
-            Item returnedItem = r.getItems().get(item.getId());
-
-            if(returnedItem != null && (r.getReturnStatus() == ReturnStatus.REQUESTED || r.getReturnStatus() == ReturnStatus.OPEN )){
+            Item returnedItem = r.getItems().get(unitItem.getId());
+            if(returnedItem != null &&  !r.isRefunded()){
                 returnProcessingQty += returnedItem.getQuantity().getCount();
-                suggestedRefund += ( returnedItem.getPrice().getValue() ) ;
             }
         }
 
@@ -1313,31 +1475,35 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         quantity.setCount(overrideLineQuantity - refundQty - returnProcessingQty);
 
-        item.setQuantity(quantity);
-
-        Price price = new Price();
-        item.setPrice(price);
-
-        price.setValue(doubleTypeConverter.valueOf(eCommerceLineItem.getPrice() * overrideLineQuantity) - refundPrice - suggestedRefund);
-        price.setCurrency("INR");
-
-
-        item.setFulfillmentId(fulfillmentId);
-
-        return item;
+        unitItem.setQuantity(quantity);
+        unitItem.setFulfillmentId(fulfillmentId);
+        unitItem.setFulfillmentIds(null);
+        unitItem.setTags(null);
+        return unitItem;
 
     }
 
     private boolean isPaid(ShopifyOrder shopifyOrder){
-        if ("paid".equals(shopifyOrder.getFinancialStatus())){
-            return true;
-        }
         PaymentTerms terms = shopifyOrder.getPaymentTerms();
 
-        if (terms == null){
+        if (terms    == null){
             return false;
         }
         double toPay = terms.getAmount();
+
+        if ("paid".equals(shopifyOrder.getFinancialStatus())){
+            if (Config.instance().isDevelopmentEnvironment()) {
+                if (shopifyOrder.getTransactions() != null) {
+                    for (Transaction t : shopifyOrder.getTransactions()) {
+                        if (t.isTest() && ObjectUtil.equals("capture", t.getKind())) {
+                            return DoubleUtils.compareTo(t.getAmount(),toPay) >= 0;
+                        }
+                    }
+                }
+                return false;
+            }
+            return true;
+        }
 
         PaymentSchedules schedules = terms.getPaymentSchedules();
         Bucket paid  = new Bucket();
@@ -1352,7 +1518,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
 
     private void setPayment(Payment payment, ShopifyOrder eCommerceOrder , double refundAmount) {
-        payment.setSettlementBasis(SettlementBasis.Collection);
 
         if (payment.getCollectedBy() == null){
             if (getProviderConfig().isCodSupported()){
@@ -1368,25 +1533,30 @@ public class ECommerceAdaptor extends SearchAdaptor {
             payment.setCollectedBy(CollectedBy.BAP);
             payment.setType(PaymentType.ON_ORDER);
         }
-        payment.setCollectedByStatus(NegotiationStatus.Assert);
+        // Part of RSP Protocol!
         payment.setCollectedByStatus(NegotiationStatus.Agree);
+        payment.setSettlementBasis(SettlementBasis.Collection);
         payment.setSettlementBasisStatus(NegotiationStatus.Agree);
         payment.setReturnWindow(getProviderConfig().getReturnWindow());
         payment.setReturnWindowStatus(NegotiationStatus.Assert);
 
-        payment.setParams(new Params());
-        payment.getParams().setCurrency(getStore().getCurrency());
+        if (payment.getParams() == null) {
+            payment.setParams(new Params());
+            payment.getParams().setCurrency(getStore().getCurrency());
 
-        if (eCommerceOrder.getPaymentTerms() != null) {
-            payment.getParams().setAmount(doubleTypeConverter.valueOf(eCommerceOrder.getPaymentTerms().getAmount()) - refundAmount);
-        }else {
-            payment.getParams().setAmount(eCommerceOrder.getTotalPrice() - refundAmount);
+            if (eCommerceOrder.getPaymentTerms() != null) {
+                payment.getParams().setAmount(doubleTypeConverter.valueOf(eCommerceOrder.getPaymentTerms().getAmount()) - refundAmount);
+            }else {
+                payment.getParams().setAmount(eCommerceOrder.getTotalPrice() - refundAmount);
+            }
         }
+
 
         SettlementDetail detail = null;
         if (payment.getSettlementDetails() == null){
             payment.setSettlementDetails( new SettlementDetails());
             detail = new SettlementDetail();
+            payment.getSettlementDetails().add(detail);
         }else if (payment.getSettlementDetails().size() == 1){
             for (SettlementDetail d : payment.getSettlementDetails()) {
                 if (d.getSettlementStatus() == PaymentStatus.NOT_PAID &&
@@ -1423,9 +1593,16 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
     }
 
-    private void setBilling(Order target, ShopifyOrder.Address source) {
+    private void setBilling(Order target, ShopifyOrder eCommerceOrder) {
+        ShopifyOrder.Address source = eCommerceOrder.getBillingAddress();
+        if (target.getBilling() != null){
+            return;
+        }
         Billing billing = new Billing();
         target.setBilling(billing);
+        billing.setCreatedAt(eCommerceOrder.getCreatedAt());
+        billing.setUpdatedAt(eCommerceOrder.getUpdatedAt());
+
 
         if (source.getCountryCode() == null){
             in.succinct.beckn.Country country = getProviderConfig().getLocation().getCountry();
@@ -1436,10 +1613,13 @@ public class ECommerceAdaptor extends SearchAdaptor {
             }
         }
 
+
         Address address = source.getAddress();
         billing.setName(address.getName());
         billing.setAddress(address);
+        billing.getAddress().setCountry(Country.findByISO(source.getCountryCode()).getIsoCode()); //We need to send code. Shopify returns name
         billing.setPhone(source.getPhone());
+        billing.setEmail(eCommerceOrder.getEmail());
     }
 
 
@@ -1485,17 +1665,18 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
             for (Item item : input.getItems()) {
 
-                Tags tags = item.getTags();
-                String update_type = tags.get("update_type");
-                String reason_code = tags.get("reason_code");
+                TagGroups tags = item.getTags();
+                String update_type = item.getTag("generic_attributes","update_type");
+                String reason_code = item.getTag("generic_attributes","reason_code");
                 int quantity = item.getQuantity().getCount();
-                String image = tags.get("image");
+                String image = item.getTag("","image");
                 if (notes.length() > 0) {
                     notes.append("\n");
                 }
                 item.setDescriptor(lastKnownOrder.getItems().get(item.getId()).getDescriptor());
                 item.setPrice(new Price());
-                item.getPrice().setValue(quantity * lastKnownOrder.getItems().get(item.getId()).getPrice().getValue()/lastKnownOrder.getItems().get(item.getId()).getQuantity().getCount());
+                item.getPrice().setValue(lastKnownOrder.getItems().get(item.getId()).getPrice().getValue()); //unite price at which the product was sold.
+                item.getPrice().setCurrency(lastKnownOrder.getItems().get(item.getId()).getPrice().getCurrency());
 
                 if (ObjectUtil.equals(update_type, "return")) {
                     Images images = new Images();
@@ -1575,10 +1756,42 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 JSONObject out = helper.post("graphql.json", payload);
                 JSONObject r = (JSONObject) ((JSONObject) (((JSONObject) out.get("data")).get("returnRequest"))).get("return");
                 returnReference = new Return();
+                returnReference.setReturnMessageId(request.getContext().getMessageId());
                 returnReference.setId((String) r.get("id"));
                 returnReference.setReturnStatus(ReturnStatus.convertor.valueOf((String) r.get("status")));
                 returnReference.setItems(becknItemsReturned);
                 returnReference.setCreatedAt(new Date());
+
+                Fulfillment qc = new Fulfillment();
+                qc.setType(FulfillmentType.return_to_origin);
+                qc.setId(String.format("reverse/%s/%s",FulfillmentType.return_to_origin,returnReference.getReturnMessageId()));
+                qc.setContact(getProviderConfig().getSupportContact());
+                qc.setProviderName(getProviderConfig().getFulfillmentProviderName());
+                qc.setTracking(false);
+                qc.setCategory(getProviderConfig().getFulfillmentCategory().toString());
+                qc.setTAT(getProviderConfig().getFulfillmentTurnAroundTime());
+                qc.setFulfillmentStatus(FulfillmentStatus.Pending);
+                qc.setStart(new FulfillmentStop(JSONAwareWrapper.parse(lastKnownOrder.getFulfillment().getEnd().toString())));
+
+                qc.getStart().setTime(new Time());
+                qc.getStart().getTime().setRange(new Range());
+                String ttl_reverse_qc = (becknItemsReturned.get(0).getTags().getTag("generic_attributes","ttl_reverseqc"));
+                if (ttl_reverse_qc == null){
+                    ttl_reverse_qc = getProviderConfig().getFulfillmentTurnAroundTime().toString();
+                }
+
+                qc.getStart().getTime().getRange().setStart(request.getContext().getTimestamp());
+                qc.getStart().getTime().getRange().setEnd(DateUtils.addHours(qc.getStart().getTime().getRange().getStart(),(int)Duration.parse(ttl_reverse_qc).toHours()));
+
+
+                qc.setEnd(new FulfillmentStop(JSONAwareWrapper.parse(lastKnownOrder.getFulfillment().getStart().toString())));
+                qc.getEnd().setTime(new Time());
+                qc.getEnd().getTime().setRange(new Range());
+                qc.getEnd().getTime().getRange().setStart(qc.getStart().getTime().getRange().getStart());
+                qc.getEnd().getTime().getRange().setEnd(DateUtils.addHours(qc.getEnd().getTime().getRange().getStart(),(int)getProviderConfig().getFulfillmentTurnAroundTime().toHours()));
+
+                returnReference.setFulfillment(qc);
+
                 if (lastKnownOrder.getReturns() == null){
                     lastKnownOrder.setReturns(new Returns());
                 }

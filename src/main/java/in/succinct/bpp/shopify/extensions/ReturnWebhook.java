@@ -1,5 +1,6 @@
 package in.succinct.bpp.shopify.extensions;
 
+import com.venky.core.date.DateUtils;
 import com.venky.core.string.StringUtil;
 import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Registry;
@@ -48,11 +49,12 @@ public class ReturnWebhook extends ShopifyWebhook {
 
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
 
+        Date now = new Date();
         Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder));
+        lastKnownOrder.setUpdatedAt(now);
         Return returnReference = lastKnownOrder.getReturns().get(returnId);
         returnReference.setReturnStatus(ReturnStatus.convertor.valueOf(((String)eReturn.get("status")).toUpperCase() ));
         localOrderSynchronizer.sync(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),lastKnownOrder);
-
 
         final Request request = new Request();
         request.setMessage(new Message());
@@ -61,7 +63,7 @@ public class ReturnWebhook extends ShopifyWebhook {
         Context context = request.getContext();
         context.setBppId(eCommerceAdaptor.getSubscriber().getSubscriberId());
         context.setBppUri(eCommerceAdaptor.getSubscriber().getSubscriberUrl());
-        context.setTimestamp(new Date());
+        context.setTimestamp(now);
         context.setAction(event);
         context.setDomain(eCommerceAdaptor.getSubscriber().getDomain());
         shopifyOrder.getNoteAttributes().forEach(na->{
@@ -74,7 +76,7 @@ public class ReturnWebhook extends ShopifyWebhook {
 
         //Fill any other attributes needed.
         //Send unsolicited on_status.
-        context.setMessageId(UUID.randomUUID().toString());
+        context.setMessageId(returnReference.getReturnMessageId() == null ? UUID.randomUUID().toString() : returnReference.getReturnMessageId());
         Order finalOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder);
         request.getMessage().setOrder(finalOrder); //updated order.
 

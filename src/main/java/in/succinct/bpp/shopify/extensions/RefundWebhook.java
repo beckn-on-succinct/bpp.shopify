@@ -1,5 +1,6 @@
 package in.succinct.bpp.shopify.extensions;
 
+import com.venky.core.date.DateUtils;
 import com.venky.core.security.Crypt;
 import com.venky.core.string.StringUtil;
 import com.venky.core.util.Bucket;
@@ -9,8 +10,10 @@ import com.venky.extension.Registry;
 import com.venky.swf.db.Database;
 import com.venky.swf.db.JdbcTypeHelper;
 import com.venky.swf.path.Path;
+import freemarker.template.utility.DateUtil;
 import in.succinct.beckn.Amount;
 import in.succinct.beckn.Context;
+import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
 import in.succinct.beckn.Order.Return;
@@ -60,8 +63,22 @@ public class RefundWebhook extends ShopifyWebhook {
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
         Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder));
 
+        Date deliveryTs = new Date();
+        Date pickupTs = new Date(deliveryTs.getTime()-60*1000L); // 1 minute.! // Fudged!! TODO Get from logistics provider
+
         Return returnReference = lastKnownOrder.getReturns().get(returnId);
         returnReference.setReturnStatus(ReturnStatus.REFUNDED);
+        returnReference.getFulfillment().setFulfillmentStatus(FulfillmentStatus.Order_delivered);
+
+        returnReference.getFulfillment().getStart().getTime().setTimestamp(pickupTs); // We dont know when it was picked and delivered
+        returnReference.getFulfillment().getStart().getTime().getRange().setStart(DateUtils.min(returnReference.getFulfillment().getStart().getTime().getRange().getStart(),pickupTs));
+        returnReference.getFulfillment().getStart().getTime().getRange().setEnd(DateUtils.max(returnReference.getFulfillment().getStart().getTime().getRange().getEnd(),pickupTs));
+
+        returnReference.getFulfillment().getEnd().getTime().setTimestamp(deliveryTs);// We dont know when it was picked and delivered
+        returnReference.getFulfillment().getEnd().getTime().getRange().setStart(DateUtils.min(returnReference.getFulfillment().getEnd().getTime().getRange().getStart(),deliveryTs));
+        returnReference.getFulfillment().getEnd().getTime().getRange().setEnd(DateUtils.max(returnReference.getFulfillment().getEnd().getTime().getRange().getEnd(),deliveryTs));
+
+
         returnReference.setRefund(new Amount());
         returnReference.setRefundId(refundId);
 
@@ -70,11 +87,13 @@ public class RefundWebhook extends ShopifyWebhook {
             returnReference.getRefund().setCurrency(transaction.getCurrency());
             amount.increment(transaction.getAmount());
         }
-        returnReference.getRefund().setValue(amount.intValue());
+        returnReference.getRefund().setValue(amount.doubleValue());
 
         localOrderSynchronizer.sync(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),lastKnownOrder);
 
         Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder);
+        becknOrder.setUpdatedAt(deliveryTs);
+
 
         final Request request = new Request();
         request.setMessage(new Message());
@@ -83,7 +102,7 @@ public class RefundWebhook extends ShopifyWebhook {
         Context context = request.getContext();
         context.setBppId(eCommerceAdaptor.getSubscriber().getSubscriberId());
         context.setBppUri(eCommerceAdaptor.getSubscriber().getSubscriberUrl());
-        context.setTimestamp(new Date());
+        context.setTimestamp(deliveryTs);
         context.setAction(event);
         context.setDomain(eCommerceAdaptor.getSubscriber().getDomain());
         shopifyOrder.getNoteAttributes().forEach(na->{
@@ -95,8 +114,9 @@ public class RefundWebhook extends ShopifyWebhook {
 
 
         //Fill any other attributes needed.
-        //Send unsolicited on_status.
-        context.setMessageId(UUID.randomUUID().toString());
+        //Send unsolicited on_status.'
+
+        context.setMessageId(returnReference.getReturnMessageId() == null ? UUID.randomUUID().toString() : returnReference.getReturnMessageId());
         networkAdaptor.getApiAdaptor().callback(eCommerceAdaptor,request);
     }
 }

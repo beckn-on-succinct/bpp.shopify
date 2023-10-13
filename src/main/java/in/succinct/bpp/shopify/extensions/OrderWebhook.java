@@ -3,9 +3,9 @@ package in.succinct.bpp.shopify.extensions;
 import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Registry;
-import com.venky.swf.db.annotations.column.COLUMN_DEF;
 import com.venky.swf.path.Path;
 import in.succinct.beckn.Context;
+import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
 import in.succinct.beckn.Order.OrderReconStatus;
@@ -14,6 +14,7 @@ import in.succinct.beckn.Order.ReconStatus;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
+import in.succinct.bpp.core.adaptor.fulfillment.FulfillmentStatusAdaptor.FulfillmentStatusAudit;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.core.db.model.rsp.Settlement;
@@ -23,7 +24,9 @@ import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class OrderWebhook extends ShopifyWebhook{
@@ -37,10 +40,9 @@ public class OrderWebhook extends ShopifyWebhook{
         JSONObject eOrder = (JSONObject) JSONValue.parse(payload);
         ShopifyOrder shopifyOrder = new ShopifyOrder(eOrder);
 
-        // Check old order here and if old order is not settled an now it is settled. Also send on_receiver_recon
         String becknTransactionId = eCommerceAdaptor.getBecknTransactionId(shopifyOrder);
-        LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
 
+        LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
         Order lastKnownOrderState = localOrderSynchronizer.getLastKnownOrder(becknTransactionId);
         if (ObjectUtil.equals(path.getHeaders().get("X-Shopify-Topic"),"orders/updated")){
             if (!localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Accepted) || localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Completed)){
@@ -48,11 +50,16 @@ public class OrderWebhook extends ShopifyWebhook{
             }
         }
 
-
         Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); //Fill all attributes here.
+
+        if (becknOrder.getPayment().getStatus() == null){
+            return;
+        }
+
         if (becknOrder.getState() == Status.Cancelled && !localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Cancelled) ){
             event = "on_cancel";
         }
+        // Check old order here and if old order is not settled an now it is settled. Also send on_receiver_recon
         if (lastKnownOrderState.getReconStatus() == ReconStatus.PAID){
             Request on_receiver_recon = new Request();
             Context context = new Context();
@@ -107,7 +114,6 @@ public class OrderWebhook extends ShopifyWebhook{
         Context context = request.getContext();
         context.setBppId(eCommerceAdaptor.getSubscriber().getSubscriberId());
         context.setBppUri(eCommerceAdaptor.getSubscriber().getSubscriberUrl());
-        context.setTimestamp(new Date());
         context.setAction(event);
         context.setDomain(eCommerceAdaptor.getSubscriber().getDomain());
         shopifyOrder.getNoteAttributes().forEach(na->{
@@ -121,6 +127,7 @@ public class OrderWebhook extends ShopifyWebhook{
         //Fill any other attributes needed.
         //Send unsolicited on_status.
         context.setMessageId(UUID.randomUUID().toString());
+        context.setTimestamp(becknOrder.getUpdatedAt());
         networkAdaptor.getApiAdaptor().callback(eCommerceAdaptor,request);
     }
 }
