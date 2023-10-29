@@ -29,6 +29,7 @@ public class ListingWebhook extends ShopifyWebhook {
 
         String productId = String.valueOf(((JSONObject)ePayload.get("product_listing")).get("product_id"));
         String topic = path.getHeaders().get("X-Shopify-Topic");
+        eCommerceAdaptor.clearCache();
         Provider provider = eCommerceAdaptor.getProvider(() -> eCommerceAdaptor.getItems(Collections.singleton(productId)));
 
         Event event = null;
