@@ -613,7 +613,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 location.getCountry().setCode(location.getAddress().getCountry());
                 */
                 location.setTime(getProviderConfig().getTime());
-                location.getTime().setLabel("enabled");
+                location.getTime().setLabel("enable");
                 location.getTime().setTimestamp(new Date());
                 location.setDescriptor(new Descriptor());
                 location.getDescriptor().setName(location.getAddress().getName());
@@ -762,6 +762,9 @@ public class ECommerceAdaptor extends SearchAdaptor {
                     price.setCurrency(getStore().getCurrency());
                     price.setValue(variant.getPrice());
                     price.setOfferedValue(variant.getPrice());
+                    if (doubleTypeConverter.valueOf(price.getMaximumValue()) < doubleTypeConverter.valueOf(price.getValue())){
+                        price.setMaximumValue(price.getValue());
+                    }
                     price.setCurrency("INR");
 
                     double taxRate = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter().valueOf(item.getTaxRate())/100.0;
