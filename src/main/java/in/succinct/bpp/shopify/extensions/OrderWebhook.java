@@ -43,7 +43,7 @@ public class OrderWebhook extends ShopifyWebhook{
         String becknTransactionId = eCommerceAdaptor.getBecknTransactionId(shopifyOrder);
 
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
-        Order lastKnownOrderState = localOrderSynchronizer.getLastKnownOrder(becknTransactionId);
+        Order lastKnownOrderState = localOrderSynchronizer.getLastKnownOrder(becknTransactionId,true);
         if (ObjectUtil.equals(path.getHeaders().get("X-Shopify-Topic"),"orders/updated")){
             if (!localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Accepted) || localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Completed)){
                 return;
@@ -56,7 +56,9 @@ public class OrderWebhook extends ShopifyWebhook{
             return;
         }
 
-        if (becknOrder.getState() == Status.Cancelled && !localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Cancelled) ){
+        if (becknOrder.getState() == Status.Cancelled && ( !localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Cancelled)  ||
+                                                                ( System.currentTimeMillis() - localOrderSynchronizer.getStatusReachedAt(becknTransactionId,Status.Cancelled).getTime() < 20000L )  ) ){
+            //Give 20 Seconds to send on_cancel.
             event = "on_cancel";
         }
         // Check old order here and if old order is not settled an now it is settled. Also send on_receiver_recon

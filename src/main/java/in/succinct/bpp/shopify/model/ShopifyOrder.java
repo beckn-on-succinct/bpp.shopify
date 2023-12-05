@@ -1,11 +1,14 @@
 package in.succinct.bpp.shopify.model;
 
+import com.venky.core.math.DoubleUtils;
 import com.venky.core.string.StringUtil;
+import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
 import com.venky.swf.db.Database;
 import com.venky.swf.plugins.collab.db.model.config.City;
 import com.venky.swf.plugins.collab.db.model.config.Country;
 import com.venky.swf.plugins.collab.db.model.config.State;
+import com.venky.swf.routing.Config;
 import in.succinct.beckn.BecknObject;
 import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
@@ -33,9 +36,11 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     public ShopifyOrder(){
         super();
     }
+
     public ShopifyOrder(JSONObject eCommerceOrder) {
         super(eCommerceOrder);
     }
+
 
     public String getAppId(){
         return get("app_id");
@@ -225,7 +230,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
     public Transactions getTransactions(){
-        return get(Transactions.class, "transactions");
+        return  get(Transactions.class, "transactions");
     }
     public void setTransactions(Transactions transactions){
         set("transactions",transactions);
@@ -347,6 +352,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }};
 
     public Status getStatus(){
+
         String s =  get("fulfillment_status");
         Status status = s == null ? null : orderStatusMap.get(s);
         Set<String> statuses = new HashSet<>(){{
@@ -372,12 +378,14 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                     status = Status.Cancelled;
                 } else if ("fulfilled".equals(s) && isDelivered()) {
                     status = Status.Completed;
-                } else if (getFulfillments().size() > 0){
+                } else if (!getFulfillments().isEmpty()){
                     status = Status.In_progress;
                 } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
                     status = Status.In_progress;
-                }else {
+                }else if (isPaid()){
                     status = Status.Accepted;
+                }else {
+                    status = Status.Created;
                 }
             }
         }
@@ -394,7 +402,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 add("success");
             }};
 
-            if (getFulfillments() != null && getFulfillments().size() > 0){
+            if (getFulfillments() != null && !getFulfillments().isEmpty()){
                 for (Fulfillment fulfillment : getFulfillments()){
                     String shipmentStatus = fulfillment.getShipmentStatus();
                     String fulfilmentStatus = fulfillment.getStatus();
@@ -409,11 +417,16 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 if (getCancelledAt() != null) {
                     status = FulfillmentStatus.Cancelled;
                 } else if ("fulfilled".equals(s)) {
+                    status = FulfillmentStatus.Order_delivered;
+                    /*
                     if (isDelivered()) {
                         status = FulfillmentStatus.Order_delivered;
                     }else {
                         status = FulfillmentStatus.Order_picked_up;
-                    }
+                    }*/
+                }else if (isPickedUp()){
+                    //Lets mark if picked up rather than fulfilled. Treat fulfilled as delivered.
+                    status = FulfillmentStatus.Order_picked_up;
                 }else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
                     status = FulfillmentStatus.Packed;
                 }else {
@@ -438,6 +451,14 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("delivered",delivered);
     }
 
+    public boolean isPickedUp(){
+        return getBoolean("picked_up");
+    }
+    public void setPickedUp(boolean picked_up){
+        set("picked_up",picked_up);
+    }
+
+
     public String getTrackingUrl(){
         return get("tracking_url");
     }
@@ -445,33 +466,78 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("tracking_url",tracking_url);
     }
 
-    public void loadMetaFields(ECommerceSDK helper) {
-        Metafields metafields = getMetafields();
-        if (metafields != null){
-            return;
+    public boolean isPaid(){
+        ShopifyOrder shopifyOrder = this;
+        PaymentTerms terms = shopifyOrder.getPaymentTerms();
+
+
+        if (terms    == null){
+            terms = new PaymentTerms();
+            terms.setAmount(shopifyOrder.getTotalPrice());
+            terms.setPaymentSchedules(new PaymentSchedules());
+        }
+        double toPay = terms.getAmount();
+
+        if ("paid".equals(shopifyOrder.getFinancialStatus())){
+            if (Config.instance().isDevelopmentEnvironment()) {
+                if (shopifyOrder.getTransactions() != null) {
+                    Bucket paid = new Bucket();
+                    for (Transaction t : shopifyOrder.getTransactions()) {
+                        if (t.isTest() && ObjectUtil.equals("capture", t.getKind())) {
+                            paid.increment(t.getAmount());
+                        }
+                    }
+                    return DoubleUtils.compareTo(paid.doubleValue(),toPay) >= 0;
+                }
+                return false;
+            }
+            return true;
         }
 
-        JSONObject meta = helper.get(String.format("/orders/%s/metafields.json",StringUtil.valueOf(getId())),new JSONObject());
-        JSONArray metafieldArray = (JSONArray) meta.get("metafields");
-        metafields = new Metafields(metafieldArray);
-        setMetafields(metafields);
+        PaymentSchedules schedules = terms.getPaymentSchedules();
+        Bucket paid  = new Bucket();
+        for (PaymentSchedule schedule : schedules){
+            if (schedule.getCompletedAt() != null ) {
+                paid.increment(schedule.getAmount());
+            }
+        }
+        return DoubleUtils.compareTo(paid.doubleValue(), toPay)>= 0;
+    }
 
-        for (Metafield m : metafields){
-            if (m.getKey().equals("settled")) {
-                setSettled(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
-            }else if (m.getKey().equals("invoice_url")){
-                JSONObject o = helper.graphql(String.format("{node(id:\"%s\"){ id ... on %s { url  , alt ,fileStatus} }}",m.getValue(),m.getValue().split("/")[3]));
-                JSONObject data = (JSONObject) o.get("data");
-                JSONObject node = (JSONObject) data.get("node");
-                if (node != null) {
-                    setInvoiceUrl((String) node.get("url"));
+    public void loadMetaFields(ECommerceSDK helper) {
+        Metafields metafields = getMetafields();
+        Transactions transactions = getTransactions();
+        if (transactions == null){
+            JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", StringUtil.valueOf(getId())), new JSONObject());
+            transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
+            setTransactions(transactions);
+        }
+
+        if (metafields == null ){
+            JSONObject meta = helper.get(String.format("/orders/%s/metafields.json",StringUtil.valueOf(getId())),new JSONObject());
+            JSONArray metafieldArray = (JSONArray) meta.get("metafields");
+            metafields = new Metafields(metafieldArray);
+            setMetafields(metafields);
+
+            for (Metafield m : metafields){
+                if (m.getKey().equals("settled")) {
+                    setSettled(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
+                }else if (m.getKey().equals("invoice_url")){
+                    JSONObject o = helper.graphql(String.format("{node(id:\"%s\"){ id ... on %s { url  , alt ,fileStatus} }}",m.getValue(),m.getValue().split("/")[3]));
+                    JSONObject data = (JSONObject) o.get("data");
+                    JSONObject node = (JSONObject) data.get("node");
+                    if (node != null) {
+                        setInvoiceUrl((String) node.get("url"));
+                    }
+                }else if (m.getKey().equals("delivered")){
+                    setDelivered(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
+                }else if (m.getKey().equals("picked_up")){
+                    setPickedUp(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
+                }else if (m.getKey().equals("tracking_url")){
+                    setTrackingUrl(m.getValue());
+                }else if (m.getKey().equals("settled_amount")) {
+                    setSettledAmount(Database.getJdbcTypeHelper("").getTypeRef(Double.class).getTypeConverter().valueOf(m.getValue()));
                 }
-            }else if (m.getKey().equals("delivered")){
-                setDelivered(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
-            }else if (m.getKey().equals("tracking_url")){
-                setTrackingUrl(m.getValue());
-            }else if (m.getKey().equals("settled_amount")) {
-                setSettledAmount(Database.getJdbcTypeHelper("").getTypeRef(Double.class).getTypeConverter().valueOf(m.getValue()));
             }
         }
 

@@ -4,7 +4,6 @@ import com.venky.cache.Cache;
 import com.venky.cache.UnboundedCache;
 import com.venky.core.date.DateUtils;
 import com.venky.core.math.DoubleHolder;
-import com.venky.core.math.DoubleUtils;
 import com.venky.core.string.StringUtil;
 import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
@@ -111,9 +110,6 @@ import in.succinct.bpp.shopify.model.ShopifyOrder;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItem;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItems;
 import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
-import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedule;
-import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentSchedules;
-import in.succinct.bpp.shopify.model.ShopifyOrder.PaymentTerms;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Refund;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Refund.RefundLineItem;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Refund.RefundLineItems;
@@ -477,8 +473,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
     @Override
     public Order confirmDraftOrder(Order inOrder) {
         String shopifyOrderId = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(inOrder);
-        JSONObject response = helper.get(String.format("/orders/%s.json", shopifyOrderId), new JSONObject());
-        ShopifyOrder shopifyOrder = new ShopifyOrder((JSONObject) response.get("order"));
 
         if (Config.instance().isDevelopmentEnvironment() && inOrder.getPayment().getStatus() == PaymentStatus.PAID) {
             JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", shopifyOrderId), new JSONObject());
@@ -497,7 +491,8 @@ public class ECommerceAdaptor extends SearchAdaptor {
             }
         }
 
-        return getBecknOrder(shopifyOrder);
+
+        return getBecknOrder(getShopifyOrder(shopifyOrderId));
     }
 
 
@@ -1002,7 +997,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
         String transactionId = getBecknTransactionId(eCommerceOrder);
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber());
         localOrderSynchronizer.setLocalOrderId(transactionId,eCommerceOrder.getId());
-        Order lastReturnedOrderJson = localOrderSynchronizer.getLastKnownOrder(transactionId);
+        Order lastReturnedOrderJson = localOrderSynchronizer.getLastKnownOrder(transactionId,true);
 
         Order order = new Order();
         order.update(lastReturnedOrderJson);
@@ -1030,6 +1025,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         localOrderSynchronizer.setFulfillmentStatusReachedAt(transactionId,eCommerceOrder.getFulfillmentStatus(),updatedAt,false);
         localOrderSynchronizer.setStatusReachedAt(transactionId,eCommerceOrder.getStatus(),updatedAt,false);
+
 
         List<FulfillmentStatusAudit> fulfillmentStatusAudits = localOrderSynchronizer.getFulfillmentStatusAudit(transactionId);
         Map<FulfillmentStatus,Date> auditMap = new HashMap<>();
@@ -1451,37 +1447,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
     }
 
-    private boolean isPaid(ShopifyOrder shopifyOrder){
-        PaymentTerms terms = shopifyOrder.getPaymentTerms();
-
-        if (terms    == null){
-            return false;
-        }
-        double toPay = terms.getAmount();
-
-        if ("paid".equals(shopifyOrder.getFinancialStatus())){
-            if (Config.instance().isDevelopmentEnvironment()) {
-                if (shopifyOrder.getTransactions() != null) {
-                    for (Transaction t : shopifyOrder.getTransactions()) {
-                        if (t.isTest() && ObjectUtil.equals("capture", t.getKind())) {
-                            return DoubleUtils.compareTo(t.getAmount(),toPay) >= 0;
-                        }
-                    }
-                }
-                return false;
-            }
-            return true;
-        }
-
-        PaymentSchedules schedules = terms.getPaymentSchedules();
-        Bucket paid  = new Bucket();
-        for (PaymentSchedule schedule : schedules){
-            if (schedule.getCompletedAt() != null ) {
-                paid.increment(schedule.getAmount());
-            }
-        }
-        return DoubleUtils.compareTo(paid.doubleValue(), toPay)>= 0;
-    }
 
 
 
@@ -1503,7 +1468,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
         }
         // Part of RSP Protocol!
         payment.setCollectedByStatus(NegotiationStatus.Agree);
-        payment.setSettlementBasis(SettlementBasis.Collection);
+        payment.setSettlementBasis(SettlementBasis.collection);
         payment.setSettlementBasisStatus(NegotiationStatus.Agree);
         payment.setReturnWindow(getProviderConfig().getReturnWindow());
         payment.setReturnWindowStatus(NegotiationStatus.Assert);
@@ -1524,6 +1489,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
         if (payment.getSettlementDetails() == null){
             payment.setSettlementDetails( new SettlementDetails());
             detail = new SettlementDetail();
+            detail.setPayload(getProviderConfig().getSettlementDetail().toString());
             payment.getSettlementDetails().add(detail);
         }else if (payment.getSettlementDetails().size() == 1){
             for (SettlementDetail d : payment.getSettlementDetails()) {
@@ -1535,12 +1501,11 @@ public class ECommerceAdaptor extends SearchAdaptor {
             }
         }
         if (detail != null) {
-            detail.setUpiAddress(getProviderConfig().getVPA());
             detail.setSettlementType(SettlementType.UPI);
             detail.setSettlementPhase(SettlementPhase.SALE_AMOUNT);
             detail.setSettlementCounterparty(SettlementCounterparty.SELLER_APP);
             detail.setSettlementStatus(PaymentStatus.NOT_PAID);
-            boolean paid = isPaid(eCommerceOrder);
+            boolean paid = eCommerceOrder.isPaid();
             boolean isSettled = eCommerceOrder.isSettled();
 
             if (payment.getCollectedBy() == CollectedBy.BPP) {
@@ -1555,6 +1520,8 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 if (paid) {
                     payment.setStatus(PaymentStatus.PAID);
                     detail.setSettlementStatus(isSettled ? PaymentStatus.PAID : PaymentStatus.NOT_PAID);
+                }else {
+                    payment.setStatus(PaymentStatus.NOT_PAID);
                 }
             }
         }
@@ -1589,8 +1556,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
         billing.setPhone(source.getPhone());
         billing.setEmail(eCommerceOrder.getEmail());
     }
-
-
     @Override
     public void update(Request request, Request reply) {
         String update_target = request.getMessage().getUpdateTarget();
@@ -1614,7 +1579,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
 
         if (ObjectUtil.equals(update_target, "item")) {
             ShopifyOrder localOrder = getShopifyOrder(input);
-            Order lastKnownOrder = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLastKnownOrder(request.getContext().getTransactionId());
+            Order lastKnownOrder = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLastKnownOrder(request.getContext().getTransactionId(),true);
 
             JSONObject jsfulfillments = helper.get(String.format("/orders/%s/fulfillments.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(input)), new JSONObject());
 

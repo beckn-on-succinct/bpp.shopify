@@ -50,7 +50,7 @@ public class ReturnWebhook extends ShopifyWebhook {
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
 
         Date now = new Date();
-        Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder));
+        Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),true);
         lastKnownOrder.setUpdatedAt(now);
         Return returnReference = lastKnownOrder.getReturns().get(returnId);
         returnReference.setReturnStatus(ReturnStatus.convertor.valueOf(((String)eReturn.get("status")).toUpperCase() ));
