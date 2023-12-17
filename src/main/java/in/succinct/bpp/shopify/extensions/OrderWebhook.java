@@ -11,6 +11,7 @@ import in.succinct.beckn.Order;
 import in.succinct.beckn.Order.OrderReconStatus;
 import in.succinct.beckn.Order.Orders;
 import in.succinct.beckn.Order.ReconStatus;
+import in.succinct.beckn.Order.Refunds;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
@@ -52,16 +53,14 @@ public class OrderWebhook extends ShopifyWebhook{
 
         Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); //Fill all attributes here.
 
+
         if (becknOrder.getPayment().getStatus() == null){
             return;
         }
 
-        if (becknOrder.getState() == Status.Cancelled && ( !localOrderSynchronizer.hasOrderReached(becknTransactionId,Status.Cancelled)  ||
-                                                                ( System.currentTimeMillis() - localOrderSynchronizer.getStatusReachedAt(becknTransactionId,Status.Cancelled).getTime() < 20000L )  ) ){
-            //Give 20 Seconds to send on_cancel.
+        if (ObjectUtil.equals(path.getHeaders().get("X-SHOPIFY-TOPIC"),"orders/cancelled")){
             event = "on_cancel";
         }
-        // Check old order here and if old order is not settled an now it is settled. Also send on_receiver_recon
         if (lastKnownOrderState.getReconStatus() == ReconStatus.PAID){
             Request on_receiver_recon = new Request();
             Context context = new Context();
@@ -111,19 +110,13 @@ public class OrderWebhook extends ShopifyWebhook{
 
         final Request request = new Request();
         request.setMessage(new Message());
-        request.setContext(new Context());
+        request.setContext(shopifyOrder.getContext());
         request.getMessage().setOrder(becknOrder);
         Context context = request.getContext();
         context.setBppId(eCommerceAdaptor.getSubscriber().getSubscriberId());
         context.setBppUri(eCommerceAdaptor.getSubscriber().getSubscriberUrl());
         context.setAction(event);
         context.setDomain(eCommerceAdaptor.getSubscriber().getDomain());
-        shopifyOrder.getNoteAttributes().forEach(na->{
-            if (na.getName().startsWith("context.")){
-                String key = na.getName().substring("context.".length());
-                context.set(key,na.getValue());
-            }
-        });
 
 
         //Fill any other attributes needed.

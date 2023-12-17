@@ -14,10 +14,12 @@ import in.succinct.beckn.BecknObjects;
 import in.succinct.beckn.BecknObjectsWithId;
 import in.succinct.beckn.BecknStrings;
 import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
+import in.succinct.beckn.Context;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.IssueSubCategory;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.ReturnReasons.ReturnReasonCode;
+import in.succinct.beckn.TagGroup;
 import in.succinct.beckn.TagGroups;
 import in.succinct.bpp.core.db.model.ProviderConfig;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
@@ -168,6 +170,26 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
 
+    public Context getContext(){
+        Context context =  get(Context.class, "context");
+        if (context == null){
+            context = new Context();
+            for (TagGroup na : getNoteAttributes()) {
+                if (na.getName().startsWith("context.")) {
+                    String key = na.getName().substring("context.".length());
+                    context.set(key, na.getValue());
+                }
+            }
+            setContext(context);
+        }
+        Context ret =  new Context();
+        ret.getInner().putAll(context.getInner());
+        return ret;
+    }
+    public void setContext(Context context){
+        set("context",context);
+    }
+
     public PaymentTerms getPaymentTerms(){
         return get(PaymentTerms.class, "payment_terms");
     }
@@ -283,21 +305,21 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
 
-    public Refunds getRefunds(){
-        return get(Refunds.class, "refunds");
+    public ShopifyRefunds getRefunds(){
+        return get(ShopifyRefunds.class, "refunds");
     }
-    public void setRefunds(Refunds refunds){
+    public void setRefunds(ShopifyRefunds refunds){
         set("refunds",refunds);
     }
-    public static class Refunds extends BecknObjectsWithId<Refund> {
-        public Refunds() {
+    public static class ShopifyRefunds extends BecknObjectsWithId<ShopifyRefund> {
+        public ShopifyRefunds() {
         }
 
-        public Refunds(JSONArray array) {
+        public ShopifyRefunds(JSONArray array) {
             super(array);
         }
 
-        public Refunds(String payload) {
+        public ShopifyRefunds(String payload) {
             super(payload);
         }
     }
@@ -382,7 +404,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                     status = Status.In_progress;
                 } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
                     status = Status.In_progress;
-                }else if (isPaid()){
+                }else if (isPaid() ||isCod()){
                     status = Status.Accepted;
                 }else {
                     status = Status.Created;
@@ -451,6 +473,12 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("delivered",delivered);
     }
 
+    public boolean isCod(){
+        return getBoolean("cod");
+    }
+    public void setCod(boolean cod){
+        set("cod",cod);
+    }
     public boolean isPickedUp(){
         return getBoolean("picked_up");
     }
@@ -537,6 +565,8 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                     setTrackingUrl(m.getValue());
                 }else if (m.getKey().equals("settled_amount")) {
                     setSettledAmount(Database.getJdbcTypeHelper("").getTypeRef(Double.class).getTypeConverter().valueOf(m.getValue()));
+                }else if (m.getKey().equals("cod")){
+                    setCod(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
                 }
             }
         }
@@ -608,6 +638,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
     }
     public static class LineItem extends BecknObject{
+        public LineItem() {
+        }
+
+        public LineItem(JSONObject object) {
+            super(object);
+        }
+
         public String getId(){
             return StringUtil.valueOf(get("id"));
         }
@@ -1097,16 +1134,25 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
 
-    public static class Refund extends ShopifyObjectWithId {
-        public Refund(){
+    public static class ShopifyRefund extends ShopifyObjectWithId {
+        public ShopifyRefund(){
 
         }
-        public Refund(JSONObject o){
+        public ShopifyRefund(JSONObject o){
             super(o);
         }
 
+
+        public String getFulfillmentId(){
+            return extendedAttributes.get("fulfillment_id");
+        }
+        public void setFulfillmentId(String fulfillment_id){
+            extendedAttributes.set("fulfillment_id",fulfillment_id);
+        }
+
+
         public Date getCreatedAt(){
-            return getDate("created_at",TIMESTAMP_FORMAT);
+            return getTimestamp("created_at");
         }
 
         public String getNote(){
@@ -1161,20 +1207,19 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 super(object);
             }
 
-            public RefundLineItem(LineItem lineItem, int quantity , CancellationReasonCode cancellationReasonCode, ProviderConfig config){
-                this(lineItem,quantity,cancellationReasonCode,null,config);
+            public RefundLineItem(LineItem lineItem, int quantity , CancellationReasonCode cancellationReasonCode, ProviderConfig config,Bucket totalPossibleRefund){
+                this(lineItem,quantity,cancellationReasonCode,null,config,totalPossibleRefund);
             }
-            public RefundLineItem(LineItem lineItem, int quantity , ReturnReasonCode returnReasonCode, ProviderConfig config){
-                this(lineItem,quantity,null,returnReasonCode,config);
+            public RefundLineItem(LineItem lineItem, int quantity , ReturnReasonCode returnReasonCode, ProviderConfig config, Bucket totalPossibleRefund){
+                this(lineItem,quantity,null,returnReasonCode,config,totalPossibleRefund);
             }
-            private RefundLineItem(LineItem lineItem, int quantity , CancellationReasonCode cancellationReasonCode, ReturnReasonCode returnReasonCode, ProviderConfig config){
+            private RefundLineItem(LineItem lineItem, int quantity , CancellationReasonCode cancellationReasonCode, ReturnReasonCode returnReasonCode, ProviderConfig config,Bucket totalPossibleRefund){
                 setLineItemId(Long.parseLong(lineItem.getId()));
                 setQuantity(quantity);
 
-                double loss = lineItem.getPrice() * quantity;
 
                 if (returnReasonCode != null){
-                    if (returnReasonCode.getIssueSubCategory() == IssueSubCategory.ITEM_QUALITY || loss < config.getMaxWriteOffAmountToAvoidRTO()) {
+                    if (returnReasonCode.getIssueSubCategory() == IssueSubCategory.ITEM_QUALITY && totalPossibleRefund.doubleValue() < config.getMaxWriteOffAmountToAvoidRTO()) {
                         setRestockType("no_restock"); // Leave the product no need to pick up !!
                     }else {
                         setRestockType("return");
@@ -1218,6 +1263,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             }
             public void setReturnId(String return_id){
                 set("return_id",return_id);
+            }
+
+            public String getRefundId(){
+                return get("refund_id");
+            }
+            public void setRefundId(String refund_id){
+                set("refund_id",refund_id);
             }
 
         }
