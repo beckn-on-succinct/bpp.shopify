@@ -77,6 +77,19 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("cancel_reason",cancel_reason);
     }
 
+    public CancellationReasonCode getCancellationReasonCode(){
+        switch (getCancelReason()) {
+            case "inventory":
+                return CancellationReasonCode.ITEM_NOT_AVAILABLE;
+            case "declined":
+                return CancellationReasonCode.BUYER_REFUSES_DELIVERY;
+            case "other":
+            default:
+                return CancellationReasonCode.REJECT_ORDER;
+        }
+    }
+
+
     public Date getCancelledAt(){
         return getTimestamp("cancelled_at");
     }
@@ -84,6 +97,12 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("cancelled_at",cancelled_at,TIMESTAMP_FORMAT);
     }
 
+    public Date getClosedAt(){
+        return getDate("closed_at");
+    }
+    public void setClosedAt(Date closed_at){
+        set("closed_at",closed_at, BecknObject.DATE_FORMAT);
+    }
     public Date getCompletedAt(){
         return getTimestamp("completed_at");
     }
@@ -398,10 +417,10 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             if (status == null){
                 if (getCancelledAt() != null) {
                     status = Status.Cancelled;
-                } else if ("fulfilled".equals(s) && isDelivered()) {
+                } else if ("fulfilled".equals(s)) {
                     status = Status.Completed;
-                } else if (!getFulfillments().isEmpty()){
-                    status = Status.In_progress;
+                } else if (!getFulfillments().isEmpty() && isPickedUp()){
+                    status = Status.Out_for_delivery;
                 } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
                     status = Status.In_progress;
                 }else if (isPaid() ||isCod()){
@@ -757,10 +776,10 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("taxable",taxable);
         }
 
-        public double getFulfillableQuantity(){
-            return getDouble("fulfillable_quantity");
+        public int getFulfillableQuantity(){
+            return getInteger("fulfillable_quantity");
         }
-        public void setFulfillableQuantity(double fulfillable_quantity){
+        public void setFulfillableQuantity(int fulfillable_quantity){
             set("fulfillable_quantity",fulfillable_quantity);
         }
         public Long getFulfillmentLineItemId(){
@@ -1131,9 +1150,70 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             set("currency",currency);
         }
 
+        public double getMaximumRefundable(){
+            return getDouble("maximum_refundable");
+        }
+        public void setMaximumRefundable(double maximum_refundable){
+            set("maximum_refundable",maximum_refundable);
+        }
+
     }
 
+    public static class OrderAdjustments extends BecknObjectsWithId<OrderAdjustment> {
 
+    }
+
+    public static class OrderAdjustment extends ShopifyObjectWithId {
+        public String getOrderId(){
+            return get("order_id");
+        }
+        public void setOrderId(String order_id){
+            set("order_id",order_id);
+        }
+
+        public String getRefundId(){
+            return get("refund_id");
+        }
+        public void setRefundId(String refund_id){
+            set("refund_id",refund_id);
+        }
+        public double getAmount(){
+            return getDouble("amount");
+        }
+        public void setAmount(double amount){
+            set("amount",amount);
+        }
+
+        public double getTaxAmount(){
+            return getDouble("tax_amount");
+        }
+        public void setTaxAmount(double tax_amount){
+            set("tax_amount",tax_amount);
+        }
+        public String getKind(){
+            return get("kind");
+        }
+        public void setKind(String kind){
+            set("kind",kind);
+        }
+
+    }
+
+    public static class Shipping  extends BecknObject{
+        public double getAmount(){
+            return getDouble("amount");
+        }
+        public void setAmount(double amount){
+            set("amount",amount);
+        }
+        public double getMaximumRefundable(){
+            return getDouble("maximum_refundable");
+        }
+        public void setMaximumRefundable(double maximum_refundable){
+            set("maximum_refundable",maximum_refundable);
+        }
+
+    }
     public static class ShopifyRefund extends ShopifyObjectWithId {
         public ShopifyRefund(){
 
@@ -1142,6 +1222,12 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             super(o);
         }
 
+        public Shipping getShipping(){
+            return get(Shipping.class, "shipping");
+        }
+        public void setShipping(Shipping shipping){
+            set("shipping",shipping);
+        }
 
         public String getFulfillmentId(){
             return extendedAttributes.get("fulfillment_id");
@@ -1174,6 +1260,13 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         }
         public void setRefundLineItems(RefundLineItems refund_line_items){
             set("refund_line_items",refund_line_items);
+        }
+
+        public OrderAdjustments getOrderAdjustments(){
+            return get(OrderAdjustments.class, "order_adjustments");
+        }
+        public void setOrderAdjustments(OrderAdjustments order_adjustments){
+            set("order_adjustments",order_adjustments);
         }
 
         public Transactions getTransactions(){

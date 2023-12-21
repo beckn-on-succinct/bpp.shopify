@@ -117,6 +117,8 @@ import in.succinct.bpp.shopify.model.ShopifyOrder;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItem;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItems;
 import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
+import in.succinct.bpp.shopify.model.ShopifyOrder.OrderAdjustment;
+import in.succinct.bpp.shopify.model.ShopifyOrder.OrderAdjustments;
 import in.succinct.bpp.shopify.model.ShopifyOrder.ShippingLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.ShopifyRefund;
 import in.succinct.bpp.shopify.model.ShopifyOrder.ShopifyRefund.RefundLineItem;
@@ -560,17 +562,125 @@ public class ECommerceAdaptor extends SearchAdaptor {
     @Override
 
     public Order cancel(Order order ) {
+        ShopifyOrder eCommerceOrder = getShopifyOrder(order);
+        String becknTransactionId =  getBecknTransactionId(eCommerceOrder);
+        Order lastKnownOrder = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLastKnownOrder(becknTransactionId,true);
 
-        JSONObject params = new JSONObject();
-        params.put("reason", "customer");
 
-        JSONObject response = helper.post(String.format("/orders/%s/cancel.json", LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order)), params);
-        String error = (String)response.get("error");
-        if (!ObjectUtil.isVoid(error)) {
-            throw new CancellationNotPossible(error);
+        ShopifyRefund calculateRefundInput = new ShopifyRefund();
+        calculateRefundInput.setRefundLineItems(new RefundLineItems());
+
+
+
+        for (LineItem lineItem : eCommerceOrder.getLineItems()) {
+            RefundLineItem refundLineItem = new RefundLineItem(lineItem, lineItem.getFulfillableQuantity(),
+                    CancellationReasonCode.convertor.valueOf(order.getCancellation().getSelectedReason().getDescriptor().getCode()),
+                    getProviderConfig(), null);
+            calculateRefundInput.getRefundLineItems().add(refundLineItem);
         }
-        ShopifyOrder eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
+
+        {
+            ShopifyRefund shopifyRefund = computeSuggestedRefund(eCommerceOrder, calculateRefundInput, true);
+
+
+            JSONObject params = new JSONObject();
+            params.put("reason", "customer");
+            params.put("refund", shopifyRefund); // Refunds to perform
+
+            JSONObject response = helper.post(String.format("/orders/%s/cancel.json", eCommerceOrder.getId()), params);
+            String error = (String)response.get("error");
+            if (!ObjectUtil.isVoid(error)) {
+                throw new CancellationNotPossible(error);
+            }
+
+            eCommerceOrder = new ShopifyOrder((JSONObject) response.get("order"));
+            eCommerceOrder.setCancelledAt(new Date());
+            eCommerceOrder.setClosedAt(new Date());
+        }
+
+
+        Fulfillment fulfillment = lastKnownOrder.getPrimaryFulfillment();
+        if (fulfillment != null){
+            lastKnownOrder.setFulfillment(fulfillment);
+        }
+        fulfillment = lastKnownOrder.getFulfillment();
+
+        String fulfillmentId = fulfillment.getId(); //This is the refund fulfillment
+
+        for (ShopifyRefund shopifyRefund : eCommerceOrder.getRefunds() ){
+            Refund refund = new Refund();
+            refund.setId(shopifyRefund.getId());
+            refund.setFulfillmentId(fulfillmentId);
+            refund.setCreatedAt(shopifyRefund.getCreatedAt());
+            refund.setItems(new NonUniqueItems());
+            for (RefundLineItem refundLineItem : shopifyRefund.getRefundLineItems()){
+                String itemId = BecknIdHelper.getBecknId(String.valueOf(refundLineItem.getLineItem().getVariantId()),getSubscriber(),Entity.item);
+                Item item = new Item(lastKnownOrder.getItems().get(itemId).toString());
+                Quantity q = new Quantity();
+                int qty = refundLineItem.getQuantity();
+                q.setCount(qty);
+                item.setQuantity(q);
+                item.setFulfillmentId(fulfillmentId);
+                item.setPayload(item.getInner().toString());
+                refund.getItems().add(item);
+            }
+            Refunds refunds = lastKnownOrder.getRefunds();
+            if (refunds == null ){
+                refunds = new Refunds();
+                lastKnownOrder.setRefunds(refunds);
+            }
+            refunds.add(refund);
+            if (fulfillment.getType() == FulfillmentType.return_to_origin) {
+                fulfillment.setFulfillmentStatus(FulfillmentStatus.Return_Liquidated);
+            }else {
+                fulfillment.setFulfillmentStatus(FulfillmentStatus.Cancelled);
+            }
+        }
+        lastKnownOrder.getFulfillments().add(fulfillment,true);
+        lastKnownOrder.setState(Status.Cancelled);
+        lastKnownOrder.setCancellation(order.getCancellation());
+        LocalOrderSynchronizer synchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber());
+        synchronizer.setStatusReachedAt(becknTransactionId,lastKnownOrder.getState(),new Date(),false);
+        synchronizer.setFulfillmentStatusReachedAt(becknTransactionId,fulfillment.getFulfillmentStatus(),new Date(),false);
+
+
+        LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).sync(becknTransactionId,lastKnownOrder);
+
         return getBecknOrder(eCommerceOrder);
+    }
+
+    private ShopifyRefund computeSuggestedRefund(ShopifyOrder localOrder, ShopifyRefund calculateRefundInput , boolean refundDelivery) {
+        JSONObject calculateRefundInputHolder = new JSONObject();
+        calculateRefundInputHolder.put("refund", calculateRefundInput);
+
+        JSONObject calculatedRefundHolder = helper.post(String.format("/orders/%s/refunds/calculate.json", localOrder.getId()), calculateRefundInputHolder);
+        ShopifyRefund calculated = new ShopifyRefund((JSONObject) calculatedRefundHolder.get("refund"));
+        calculated.setNote(calculateRefundInput.getNote()); // Shopify bug! reset
+        Bucket extra = new Bucket();
+
+        if (refundDelivery) {
+            extra.increment(calculated.getShipping().getMaximumRefundable());
+        }
+        calculated.getTransactions().forEach(t -> {
+            if (t.getKind().equals("suggested_refund")) {
+                t.setKind("refund");
+            }
+            if (t.getAmount() < t.getMaximumRefundable() ){
+                double et = t.getMaximumRefundable() - t.getAmount();
+                double allowed = Math.min(extra.doubleValue(),et);
+                extra.decrement(allowed);
+                t.setAmount(t.getAmount() + allowed);
+            }
+        });
+
+        return calculated;
+    }
+    private ShopifyRefund perform(ShopifyOrder localOrder, ShopifyRefund precalculatedRefund){
+        JSONObject calculatedRefundInputHolder = new JSONObject();
+        calculatedRefundInputHolder.put("refund", precalculatedRefund);
+
+        JSONObject refundHolder = helper.post(String.format("/orders/%s/refunds.json", localOrder.getId()), calculatedRefundInputHolder);
+        return new ShopifyRefund((JSONObject) refundHolder.get("refund"));
     }
 
     @Override
@@ -1060,21 +1170,29 @@ public class ECommerceAdaptor extends SearchAdaptor {
         if (fulfillment != null){
             order.setFulfillment(fulfillment);
         }
+        fulfillment = order.getFulfillment();
+        if (fulfillment == null){
+            fulfillment = new Fulfillment();
+            order.setFulfillment(fulfillment);
+        }
 
+        if (ObjectUtil.isVoid(fulfillment.getType())) {
+            fulfillment.setType(FulfillmentType.home_delivery);
+        }
         if (fulfillment.getId() == null) {
             String fulfillmentId = "fulfillment/" + fulfillment.getType() + "/" + transactionId;
             fulfillment.setId(fulfillmentId);
         }
 
-        if (ObjectUtil.isVoid(order.getFulfillment().getType())) {
-            fulfillment.setType(FulfillmentType.home_delivery);
-        }
 
         Date updatedAt = eCommerceOrder.getUpdatedAt();
 
         localOrderSynchronizer.setFulfillmentStatusReachedAt(transactionId,eCommerceOrder.getFulfillmentStatus(),updatedAt,false);
-        localOrderSynchronizer.setStatusReachedAt(transactionId,eCommerceOrder.getStatus(),updatedAt,false);
 
+        if (!localOrderSynchronizer.hasOrderReached(transactionId,eCommerceOrder.getStatus())){
+            order.setState(eCommerceOrder.getStatus());
+        }
+        localOrderSynchronizer.setStatusReachedAt(transactionId,eCommerceOrder.getStatus(),updatedAt,false);
 
         List<FulfillmentStatusAudit> fulfillmentStatusAudits = localOrderSynchronizer.getFulfillmentStatusAudit(transactionId);
         Map<FulfillmentStatus,Date> auditMap = new HashMap<>();
@@ -1115,8 +1233,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
             }
         }
 
-
-        order.setState(eCommerceOrder.getStatus());
         order.setItems(new NonUniqueItems());
 
         initializeRefundFulfillments(order,eCommerceOrder);
@@ -1311,7 +1427,6 @@ public class ECommerceAdaptor extends SearchAdaptor {
         if (cancellation != null) {
             //buyer cancellation
             cancellation.setId( descriptor == null ? null : descriptor.getCode());
-            order.setState(Status.Cancelled);
         }
 
         if (order.getState() == Status.Cancelled){
@@ -1321,21 +1436,18 @@ public class ECommerceAdaptor extends SearchAdaptor {
                 order.getCancellation().setSelectedReason(new Option());
                 order.getCancellation().getSelectedReason().setDescriptor(new Descriptor());
                 descriptor = order.getCancellation().getSelectedReason().getDescriptor();
+                descriptor.setCode(CancellationReasonCode.convertor.toString(eCommerceOrder.getCancellationReasonCode()));
+                order.getCancellation().setId(descriptor.getCode());
 
-                switch (eCommerceOrder.getCancelReason()) {
-                    case "inventory":
-                        descriptor.setCode(CancellationReasonCode.convertor.toString(CancellationReasonCode.ITEM_NOT_AVAILABLE));
+                switch (eCommerceOrder.getCancellationReasonCode()) {
+                    case ITEM_NOT_AVAILABLE:
                         descriptor.setLongDesc("One or more items in the Order not available");
-                        order.getCancellation().setId(descriptor.getCode());
                         break;
-                    case "declined":
-                        descriptor.setCode(CancellationReasonCode.convertor.toString(CancellationReasonCode.BUYER_REFUSES_DELIVERY));
-                        order.getCancellation().setId(descriptor.getCode());
+                    case BUYER_REFUSES_DELIVERY:
+                        descriptor.setLongDesc("Buyer Refused delivery");
                         break;
-                    case "other":
-                        descriptor.setCode(CancellationReasonCode.convertor.toString(CancellationReasonCode.REJECT_ORDER));
+                    default:
                         descriptor.setLongDesc("Unable to fulfill order!");
-                        order.getCancellation().setId(descriptor.getCode());
                         break;
                 }
             }
@@ -1443,7 +1555,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
         }
         if (refundedFulfillment.getType() != FulfillmentType.return_to_origin) {
             if (tagGroups.getTag("cancel_request","reason_id") == null){
-                String cancellationCode =  CancellationReasonCode.convertor.toString(CancellationReasonCode.ITEM_NOT_AVAILABLE);
+                String cancellationCode =  CancellationReasonCode.convertor.toString(shopifyOrder.getCancellationReasonCode());
                 if (order.getCancellation() != null){
                     cancellationCode =  order.getCancellation().getSelectedReason().getDescriptor().getCode();
                 }
@@ -1521,7 +1633,11 @@ public class ECommerceAdaptor extends SearchAdaptor {
                     break;
                 case REFUNDED:
                 case CLOSED:
-                    returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Return_Delivered);
+                    if (r.isLiquidated()){
+                        returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Return_Liquidated);
+                    }else {
+                        returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Return_Delivered);
+                    }
                     break;
             }
 
@@ -1911,6 +2027,7 @@ public class ECommerceAdaptor extends SearchAdaptor {
                         lastKnownOrder.setReturns(new Returns());
                     }
                     lastKnownOrder.getReturns().add(returnReference);
+                    lastKnownOrder.getFulfillments().add(fulfillment,true);
                     LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).sync(request.getContext().getTransactionId(),lastKnownOrder);
                 }
             }

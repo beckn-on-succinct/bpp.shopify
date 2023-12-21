@@ -4,6 +4,7 @@ import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
+import in.succinct.beckn.Cancellation.CancelledBy;
 import in.succinct.beckn.Context;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Message;
@@ -60,6 +61,11 @@ public class OrderWebhook extends ShopifyWebhook{
 
         if (ObjectUtil.equals(path.getHeaders().get("X-SHOPIFY-TOPIC"),"orders/cancelled")){
             event = "on_cancel";
+            if (becknOrder.getCancellation() != null){
+                if (becknOrder.getCancellation().getCancelledBy() == CancelledBy.BUYER) {
+                    return; /// Buyer cancel sent from cancel api not need to send from webhook
+                }
+            }
         }
         if (lastKnownOrderState.getReconStatus() == ReconStatus.PAID){
             Request on_receiver_recon = new Request();

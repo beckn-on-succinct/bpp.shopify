@@ -64,6 +64,10 @@ public class RefundWebhook extends ShopifyWebhook {
         if (lastKnownOrder.getRefunds() == null){
             lastKnownOrder.setRefunds(new Refunds());
         }
+        if (lastKnownOrder.getRefunds().get(refundId) != null){
+            // Refund hook called for refund already processed for the order.
+                return; // Do nothing
+        }
 
         final Request request = new Request();
         request.setMessage(new Message());
@@ -95,6 +99,7 @@ public class RefundWebhook extends ShopifyWebhook {
                 JSONObject node = (JSONObject) (((JSONObject) array.get(0)).get("node"));
                 JSONArray deliveries = (JSONArray) (((JSONObject)node.get("reverseDeliveries")).get("edges"));
                 liquidated = deliveries == null || deliveries.isEmpty();
+                returnReference.setLiquidated(liquidated);
                 if (!liquidated){
                     JSONObject reverseDelivery = (JSONObject)((JSONObject)deliveries.get(0)).get("node");
                     JSONObject reverseDeliverable = reverseDelivery == null ? null : (JSONObject) reverseDelivery.get("deliverable");
@@ -141,6 +146,7 @@ public class RefundWebhook extends ShopifyWebhook {
             lastKnownOrder.getFulfillments().add(returnFulfillment,true);
             context.setTimestamp(deliveryTs);
             context.setMessageId(returnReference.getReturnMessageId());
+            context.setAction("on_update");
         }else {
             context.setMessageId(UUID.randomUUID().toString());
             Refund refund = new Refund();
