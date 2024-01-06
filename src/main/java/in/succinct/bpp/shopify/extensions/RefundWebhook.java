@@ -153,28 +153,21 @@ public class RefundWebhook extends ShopifyWebhook {
             refund.setId(refundId);
             refund.setCreatedAt(new Date());
 
-            refund.setItems(new NonUniqueItems());
-
-            Fulfillment refundFulfillment = null;
-            if (shopifyOrder.getStatus() == Status.Cancelled){
-                refundFulfillment = lastKnownOrder.getPrimaryFulfillment();
-            }else {
-                refundFulfillment = new Fulfillment();
-                refundFulfillment.setId("refund:"+UUID.randomUUID());
-                refundFulfillment.setType(FulfillmentType.cancel);
-            }
-
+            Fulfillment refundFulfillment = new Fulfillment();
+            refundFulfillment.setId("refund:"+UUID.randomUUID());
+            refundFulfillment.setType(FulfillmentType.cancel);
             refundFulfillment.setFulfillmentStatus(FulfillmentStatus.Cancelled);
 
+            refund.setItems(new NonUniqueItems());
             // Merchant Cancel
             JSONArray refundLineItems = (JSONArray) ePayload.get("refund_line_items");
-            for (Object refundLineItem : refundLineItems){
-                LineItem lineItem = new LineItem((JSONObject)((JSONObject)refundLineItem).get("line_item"));
+            for (Object refundLineItem : refundLineItems) {
+                LineItem lineItem = new LineItem((JSONObject) ((JSONObject) refundLineItem).get("line_item"));
                 String itemId = BecknIdHelper.getBecknId(String.valueOf(lineItem.getVariantId()), eCommerceAdaptor.getSubscriber(), Entity.item);
 
                 Item item = new Item(lastKnownOrder.getItems().get(itemId).toString());
                 Quantity q = new Quantity();
-                int qty = Integer.parseInt(StringUtil.valueOf(((JSONObject)refundLineItem).get("quantity")));
+                int qty = Integer.parseInt(StringUtil.valueOf(((JSONObject) refundLineItem).get("quantity")));
                 q.setCount(qty);
                 item.setQuantity(q);
                 item.setFulfillmentId(refundFulfillment.getId());
@@ -182,8 +175,14 @@ public class RefundWebhook extends ShopifyWebhook {
                 refund.getItems().add(item);
             }
             refund.setFulfillmentId(refundFulfillment.getId());
-            lastKnownOrder.getRefunds().add(refund);
+            lastKnownOrder.getRefunds().add(refund,true);
             lastKnownOrder.getFulfillments().add(refundFulfillment,true);
+
+            if (shopifyOrder.getStatus() == Status.Cancelled){
+                context.setAction("on_cancel");
+            }else {
+                context.setAction("on_update");
+            }
         }
 
 

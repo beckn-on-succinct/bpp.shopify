@@ -4,31 +4,27 @@ import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
-import in.succinct.beckn.Cancellation.CancelledBy;
+import in.succinct.beckn.Amount;
 import in.succinct.beckn.Context;
-import in.succinct.beckn.Fulfillment.FulfillmentStatus;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
 import in.succinct.beckn.Order.OrderReconStatus;
 import in.succinct.beckn.Order.Orders;
 import in.succinct.beckn.Order.ReconStatus;
-import in.succinct.beckn.Order.Refunds;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.NetworkAdaptor;
-import in.succinct.bpp.core.adaptor.fulfillment.FulfillmentStatusAdaptor.FulfillmentStatusAudit;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.core.db.model.rsp.Settlement;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
 import in.succinct.bpp.shopify.model.ShopifyOrder;
+import in.succinct.bpp.shopify.model.ShopifyOrder.ShopifyRefund;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 public class OrderWebhook extends ShopifyWebhook{
@@ -52,6 +48,25 @@ public class OrderWebhook extends ShopifyWebhook{
             }
         }
 
+        if (lastKnownOrderState.getState() != shopifyOrder.getStatus()){
+            if (shopifyOrder.getStatus() == Status.Cancelled){
+                //Cancelling. !!
+                return;
+            }
+        }
+        if (ObjectUtil.equals(path.getHeaders().get("X-SHOPIFY-TOPIC"),"orders/cancelled")){
+            // Let the message be sent via refund hook.!!
+            return;
+        }
+        // All Refunds available!
+        boolean allRefundsPresent = true;
+        for (ShopifyRefund shopifyRefund : shopifyOrder.getRefunds()){
+            allRefundsPresent = allRefundsPresent && lastKnownOrderState.getRefunds().get(shopifyRefund.getId()) != null;
+        }
+        if (!allRefundsPresent){
+            // Let refund hook process this..
+            return;
+        }
         Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); //Fill all attributes here.
 
 
@@ -59,14 +74,6 @@ public class OrderWebhook extends ShopifyWebhook{
             return;
         }
 
-        if (ObjectUtil.equals(path.getHeaders().get("X-SHOPIFY-TOPIC"),"orders/cancelled")){
-            event = "on_cancel";
-            if (becknOrder.getCancellation() != null){
-                if (becknOrder.getCancellation().getCancelledBy() == CancelledBy.BUYER) {
-                    return; /// Buyer cancel sent from cancel api not need to send from webhook
-                }
-            }
-        }
         if (lastKnownOrderState.getReconStatus() == ReconStatus.PAID){
             Request on_receiver_recon = new Request();
             Context context = new Context();
@@ -85,7 +92,7 @@ public class OrderWebhook extends ShopifyWebhook{
 
             if (shopifyOrder.isSettled()){
                 becknOrder.setOrderReconStatus(OrderReconStatus.FINALE);
-                becknOrder.setCounterPartyReconStatus(ReconStatus.PAID);
+                becknOrder.setCounterpartyReconStatus(ReconStatus.PAID);
             }else if (shopifyOrder.getSettledAmount() > 0){
                 List<Settlement> settlementList = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber()).getSettlements(becknTransactionId);
                 Bucket settlementAmountExpected = new Bucket();
@@ -103,11 +110,14 @@ public class OrderWebhook extends ShopifyWebhook{
                 }
                 becknOrder.setOrderReconStatus(OrderReconStatus.FINALE);
                 if (settlementAmountExpected.doubleValue() > shopifyOrder.getSettledAmount()){
-                    becknOrder.setCounterPartyReconStatus(ReconStatus.UNDER_PAID);
-                    becknOrder.setCounterPartyDiffAmount(settlementAmountExpected.doubleValue()-shopifyOrder.getSettledAmount());
+                    becknOrder.setCounterpartyReconStatus(ReconStatus.UNDER_PAID);
+                    Amount diff = new Amount();
+                    diff.setValue(settlementAmountExpected.doubleValue()-shopifyOrder.getSettledAmount());
+                    diff.setCurrency("INR");
+                    becknOrder.setCounterpartyDiffAmount(diff);
                 }else {
-                    becknOrder.setCounterPartyReconStatus(ReconStatus.PAID);
-                    becknOrder.setCounterPartyDiffAmount(null);
+                    becknOrder.setCounterpartyReconStatus(ReconStatus.PAID);
+                    becknOrder.setCounterpartyDiffAmount(null);
                 }
             }
             networkAdaptor.getApiAdaptor().callback(eCommerceAdaptor,on_receiver_recon);

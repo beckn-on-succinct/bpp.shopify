@@ -78,6 +78,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
     public CancellationReasonCode getCancellationReasonCode(){
+        if (ObjectUtil.isVoid(getCancelReason())){
+            return CancellationReasonCode.ITEM_NOT_AVAILABLE;
+        }
         switch (getCancelReason()) {
             case "inventory":
                 return CancellationReasonCode.ITEM_NOT_AVAILABLE;
