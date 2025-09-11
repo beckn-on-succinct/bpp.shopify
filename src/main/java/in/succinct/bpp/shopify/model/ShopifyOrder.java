@@ -383,22 +383,22 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
     static Map<String, Status> orderStatusMap = new HashMap<>() {{
         put("restocked",Status.Cancelled);
-        put("ready_for_pickup",Status.In_progress);
+        put("ready_for_pickup",Status.Prepared);
         put("delivered",Status.Completed);
-        put("in_transit",Status.In_progress);
-        put("out_for_delivery",Status.In_progress);
-        put("failure",Status.In_progress);
-        put("confirmed",Status.In_progress);
+        put("in_transit",Status.In_Transit);
+        put("out_for_delivery",Status.In_Transit);
+        put("failure",Status.In_Transit);
+        put("confirmed",Status.Accepted);
 
     }};
 
     static Map<String, FulfillmentStatus> fulfillmentStatusMap = new HashMap<>() {{
-        put("ready_for_pickup",FulfillmentStatus.Packed);
-        put("delivered",FulfillmentStatus.Order_delivered);
-        put("in_transit",FulfillmentStatus.Order_picked_up);
-        put("out_for_delivery",FulfillmentStatus.Out_for_delivery);
+        put("ready_for_pickup",FulfillmentStatus.Prepared);
+        put("delivered",FulfillmentStatus.Completed);
+        put("in_transit",FulfillmentStatus.In_Transit);
+        put("out_for_delivery",FulfillmentStatus.In_Transit);
         put("failure",FulfillmentStatus.Cancelled);
-        put("confirmed",FulfillmentStatus.Packed);
+        put("confirmed",FulfillmentStatus.Prepared);
     }};
 
     public Status getStatus(){
@@ -429,9 +429,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 } else if ("fulfilled".equals(s)) {
                     status = Status.Completed;
                 } else if (!getFulfillments().isEmpty() && isPickedUp()){
-                    status = Status.Out_for_delivery;
+                    status = Status.In_Transit;
                 } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
-                    status = Status.In_progress;
+                    status = Status.Prepared;
                 }else if (isPaid() ||isCod()){
                     status = Status.Accepted;
                 }else {
@@ -467,7 +467,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 if (getCancelledAt() != null) {
                     status = FulfillmentStatus.Cancelled;
                 } else if ("fulfilled".equals(s)) {
-                    status = FulfillmentStatus.Order_delivered;
+                    status = FulfillmentStatus.Completed;
                     /*
                     if (isDelivered()) {
                         status = FulfillmentStatus.Order_delivered;
@@ -476,11 +476,11 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                     }*/
                 }else if (isPickedUp()){
                     //Lets mark if picked up rather than fulfilled. Treat fulfilled as delivered.
-                    status = FulfillmentStatus.Order_picked_up;
+                    status = FulfillmentStatus.In_Transit;
                 }else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
-                    status = FulfillmentStatus.Packed;
+                    status = FulfillmentStatus.Prepared;
                 }else {
-                    status = FulfillmentStatus.Pending;
+                    status = FulfillmentStatus.Preparing;
                 }
             }
         }

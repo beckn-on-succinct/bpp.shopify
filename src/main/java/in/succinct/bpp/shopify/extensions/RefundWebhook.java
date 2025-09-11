@@ -5,24 +5,23 @@ import com.venky.core.string.StringUtil;
 import com.venky.core.util.Bucket;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
-import in.succinct.beckn.Amount;
+import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
 import in.succinct.beckn.Context;
 import in.succinct.beckn.Fulfillment;
 import in.succinct.beckn.Fulfillment.FulfillmentStatus;
-import in.succinct.beckn.Fulfillment.FulfillmentType;
+import in.succinct.beckn.Fulfillment.RetailFulfillmentType;
+import in.succinct.beckn.Invoice;
+import in.succinct.beckn.Invoice.Dispute;
+import in.succinct.beckn.Invoice.Dispute.Credit;
+import in.succinct.beckn.Invoice.Dispute.Credit.Credits;
 import in.succinct.beckn.Item;
+import in.succinct.beckn.Items;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
-import in.succinct.beckn.Order.NonUniqueItems;
-import in.succinct.beckn.Order.Refund;
-import in.succinct.beckn.Order.Refunds;
-import in.succinct.beckn.Order.Return;
-import in.succinct.beckn.Order.Return.ReturnStatus;
 import in.succinct.beckn.Order.Status;
 import in.succinct.beckn.Quantity;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.api.NetworkApiAdaptor;
-
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
 import in.succinct.bpp.shopify.adaptor.ECommerceAdaptor;
@@ -38,6 +37,8 @@ import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
 import java.util.Date;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 public class RefundWebhook extends ShopifyWebhook {
@@ -63,10 +64,16 @@ public class RefundWebhook extends ShopifyWebhook {
 
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber());
         Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),true);
-        if (lastKnownOrder.getRefunds() == null){
-            lastKnownOrder.setRefunds(new Refunds());
+        Set<String> refundIds = new HashSet<>();
+        for (Invoice invoice : lastKnownOrder.getInvoices()) {
+            for (Dispute dispute : invoice.getDisputes()) {
+                for (Credit credit : dispute.getCredits()) {
+                    refundIds.add(credit.getId());
+                }
+            }
         }
-        if (lastKnownOrder.getRefunds().get(refundId) != null){
+        
+        if (refundIds.contains(refundId) ){
             // Refund hook called for refund already processed for the order.
                 return; // Do nothing
         }
@@ -92,16 +99,18 @@ public class RefundWebhook extends ShopifyWebhook {
             Date deliveryTs = new Date();
             Date pickupTs = new Date(deliveryTs.getTime()-60*1000L); // 1 minute.! // Fudged!! TODO Get from logistics provider
 
-
-            Return returnReference = lastKnownOrder.getReturns().get(returnId);
-            Fulfillment returnFulfillment = lastKnownOrder.getFulfillments().get(returnReference.getFulfillmentId());
+            Invoice invoice  = lastKnownOrder.getInvoice(lastKnownOrder.getFulfillment().getId());
+            
+            Dispute returnReference = invoice.getDisputes().get(returnId);
+            
+            Fulfillment returnFulfillment = lastKnownOrder.getFulfillments().get(returnReference.getId()); // DisputeId is the fulfillment Id also
+            
             JSONArray array = (JSONArray) (((JSONObject)eReturn.get("reverseFulfillmentOrders")).get("edges"));
 
             if ( array != null && ! array.isEmpty()){
                 JSONObject node = (JSONObject) (((JSONObject) array.get(0)).get("node"));
                 JSONArray deliveries = (JSONArray) (((JSONObject)node.get("reverseDeliveries")).get("edges"));
                 liquidated = deliveries == null || deliveries.isEmpty();
-                returnReference.setLiquidated(liquidated);
                 if (!liquidated){
                     JSONObject reverseDelivery = (JSONObject)((JSONObject)deliveries.get(0)).get("node");
                     JSONObject reverseDeliverable = reverseDelivery == null ? null : (JSONObject) reverseDelivery.get("deliverable");
@@ -117,50 +126,59 @@ public class RefundWebhook extends ShopifyWebhook {
                     }
                 }
             }
-
-
-            returnReference.setReturnStatus(ReturnStatus.REFUNDED);
+            
+            returnReference.setStatus(Dispute.Status.AmountAuthorized);
             if (!liquidated) {
-                returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Return_Delivered);
+                returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Completed);
             }else {
-                returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Return_Liquidated);
+                returnFulfillment.setFulfillmentStatus(FulfillmentStatus.Cancelled);
             }
 
 
-            returnFulfillment.getStart().getTime().setTimestamp(pickupTs); // We dont know when it was picked and delivered
-            returnFulfillment.getStart().getTime().getRange().setStart(DateUtils.min(returnFulfillment.getStart().getTime().getRange().getStart(),pickupTs));
-            returnFulfillment.getStart().getTime().getRange().setEnd(DateUtils.max(returnFulfillment.getStart().getTime().getRange().getEnd(),pickupTs));
+            returnFulfillment._getStart().getTime().setTimestamp(pickupTs); // We dont know when it was picked and delivered
+            returnFulfillment._getStart().getTime().getRange().setStart(DateUtils.min(returnFulfillment._getStart().getTime().getRange().getStart(),pickupTs));
+            returnFulfillment._getStart().getTime().getRange().setEnd(DateUtils.max(returnFulfillment._getStart().getTime().getRange().getEnd(),pickupTs));
 
-            returnFulfillment.getEnd().getTime().setTimestamp(deliveryTs);// We dont know when it was picked and delivered
-            returnFulfillment.getEnd().getTime().getRange().setStart(DateUtils.min(returnFulfillment.getEnd().getTime().getRange().getStart(),deliveryTs));
-            returnFulfillment.getEnd().getTime().getRange().setEnd(DateUtils.max(returnFulfillment.getEnd().getTime().getRange().getEnd(),deliveryTs));
+            returnFulfillment._getEnd().getTime().setTimestamp(deliveryTs);// We dont know when it was picked and delivered
+            returnFulfillment._getEnd().getTime().getRange().setStart(DateUtils.min(returnFulfillment._getEnd().getTime().getRange().getStart(),deliveryTs));
+            returnFulfillment._getEnd().getTime().getRange().setEnd(DateUtils.max(returnFulfillment._getEnd().getTime().getRange().getEnd(),deliveryTs));
 
-            returnReference.setRefund(new Amount());
-            returnReference.setRefundId(refundId);
-            returnReference.getRefund().setValue(refundedAmount.doubleValue());
-            returnReference.getRefund().setCurrency(lastKnownOrder.getQuote().getPrice().getCurrency());
-            Refund refund = new Refund();
-            refund.setId(refundId);
-            refund.setCreatedAt(new Date());
-            refund.setItems(returnReference.getItems());
-            refund.setFulfillmentId(returnFulfillment.getId());
-            lastKnownOrder.getRefunds().add(refund);
+            Credits credits = returnReference.getCredits(true);
+            Credit credit = new Credit();
+            credit.setCurrency(lastKnownOrder.getQuote().getPrice().getCurrency());
+            credit.setAmount(refundedAmount.doubleValue());
+            credit.setDate(new Date());
+            credit.setId(refundId);
+            credits.add(credit);
+            
             lastKnownOrder.getFulfillments().add(returnFulfillment,true);
             context.setTimestamp(deliveryTs);
-            context.setMessageId(returnReference.getReturnMessageId());
+            context.setMessageId(returnReference.getDisputeMessageId());
             context.setAction("on_update");
         }else {
             context.setMessageId(UUID.randomUUID().toString());
-            Refund refund = new Refund();
+            Invoice invoice = lastKnownOrder.getInvoice(lastKnownOrder.getFulfillment().getId());
+            
+            Dispute dummy = new Dispute();
+            dummy.setStatus(Dispute.Status.AmountAuthorized);
+            dummy.setDisputeAmount(0);
+            dummy.setAuthorizedAmount(refundedAmount.doubleValue());
+            dummy.setReason(CancellationReasonCode.convertor.toString(CancellationReasonCode.ITEM_NOT_AVAILABLE));
+            dummy.setId("refund:"+UUID.randomUUID().toString());
+            dummy.setItems(new Items());
+            Credit refund = new Credit();
             refund.setId(refundId);
-            refund.setCreatedAt(new Date());
-
+            refund.setDate(new Date());
+            refund.setAmount(refundedAmount.doubleValue());
+            refund.setCurrency(lastKnownOrder.getQuote().getPrice().getCurrency());
+            
+            
             Fulfillment refundFulfillment = new Fulfillment();
-            refundFulfillment.setId("refund:"+UUID.randomUUID());
-            refundFulfillment.setType(FulfillmentType.cancel);
+            refundFulfillment.setId(dummy.getId());
+            refundFulfillment.setType(RetailFulfillmentType.cancel.toString());
             refundFulfillment.setFulfillmentStatus(FulfillmentStatus.Cancelled);
 
-            refund.setItems(new NonUniqueItems());
+            
             // Merchant Cancel
             JSONArray refundLineItems = (JSONArray) ePayload.get("refund_line_items");
             for (Object refundLineItem : refundLineItems) {
@@ -174,10 +192,12 @@ public class RefundWebhook extends ShopifyWebhook {
                 item.setQuantity(q);
                 item.setFulfillmentId(refundFulfillment.getId());
                 item.setPayload(item.getInner().toString());
-                refund.getItems().add(item);
+                dummy.getItems().add(item);
             }
-            refund.setFulfillmentId(refundFulfillment.getId());
-            lastKnownOrder.getRefunds().add(refund,true);
+            
+            dummy.getCredits(true).add(refund,true);
+            invoice.getDisputes().add(dummy);
+            
             lastKnownOrder.getFulfillments().add(refundFulfillment,true);
 
             if (shopifyOrder.getStatus() == Status.Cancelled){

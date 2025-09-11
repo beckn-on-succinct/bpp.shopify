@@ -6,12 +6,15 @@ import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
 import in.succinct.beckn.Amount;
 import in.succinct.beckn.Context;
+import in.succinct.beckn.Invoice;
+import in.succinct.beckn.Invoice.Dispute;
+import in.succinct.beckn.Invoice.Dispute.Credit;
+import in.succinct.beckn.Invoice.Dispute.Credit.Credits;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
-import in.succinct.beckn.Order.OrderReconStatus;
 import in.succinct.beckn.Order.Orders;
-import in.succinct.beckn.Order.ReconStatus;
 import in.succinct.beckn.Order.Status;
+import in.succinct.beckn.Payment;
 import in.succinct.beckn.Request;
 import in.succinct.bpp.core.adaptor.api.NetworkApiAdaptor;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
@@ -25,7 +28,9 @@ import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public class OrderWebhook extends ShopifyWebhook{
@@ -49,7 +54,7 @@ public class OrderWebhook extends ShopifyWebhook{
             }
         }
 
-        if (lastKnownOrderState.getState() != shopifyOrder.getStatus()){
+        if (lastKnownOrderState.getStatus() != shopifyOrder.getStatus()){
             if (shopifyOrder.getStatus() == Status.Cancelled){
                 //Cancelling. !!
                 return;
@@ -59,71 +64,31 @@ public class OrderWebhook extends ShopifyWebhook{
             // Let the message be sent via refund hook.!!
             return;
         }
+        
+        Set<String> refundIds = new HashSet<>();
+        for (Invoice invoice : lastKnownOrderState.getInvoices()) {
+            for (Dispute dispute : invoice.getDisputes()) {
+                for (Credit credit : dispute.getCredits()) {
+                    refundIds.add(credit.getId());
+                }
+            }
+        }
         // All Refunds available!
         boolean allRefundsPresent = true;
         for (ShopifyRefund shopifyRefund : shopifyOrder.getRefunds()){
-            allRefundsPresent = allRefundsPresent && lastKnownOrderState.getRefunds().get(shopifyRefund.getId()) != null;
+            allRefundsPresent = allRefundsPresent && refundIds.contains(shopifyRefund.getId());
         }
         if (!allRefundsPresent){
             // Let refund hook process this..
             return;
         }
         Order becknOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); //Fill all attributes here.
-
-
-        if (becknOrder.getPayment().getStatus() == null){
+        
+        Payment payment = becknOrder.getPayments().get(0);
+        if (payment.getStatus() == null){
             return;
         }
 
-        if (lastKnownOrderState.getReconStatus() == ReconStatus.PAID){
-            Request on_receiver_recon = new Request();
-            Context context = new Context();
-            on_receiver_recon.setContext(context);
-            context.setNetworkId(networkAdaptor.getId());
-            context.setAction("on_receiver_recon");
-            context.setBppId(becknOrder.getReceiverSubscriberId());
-            context.setBapId(becknOrder.getCollectorSubscriberId());
-            context.setDomain("NTS10");
-            context.setTimestamp(new Date());
-            context.setBppUri(eCommerceAdaptor.getSubscriber().getSubscriberUrl());
-            on_receiver_recon.setMessage(new Message());
-            Orders orders = new Orders();
-            on_receiver_recon.getMessage().setOrders(orders);
-            orders.add(becknOrder);
-
-            if (shopifyOrder.isSettled()){
-                becknOrder.setOrderReconStatus(OrderReconStatus.FINALE);
-                becknOrder.setCounterpartyReconStatus(ReconStatus.PAID);
-            }else if (shopifyOrder.getSettledAmount() > 0){
-                List<Settlement> settlementList = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(eCommerceAdaptor.getSubscriber()).getSettlements(becknTransactionId);
-                Bucket settlementAmountExpected = new Bucket();
-                Settlement current = null;
-                for (Settlement settlement : settlementList) {
-                    settlementAmountExpected.increment(settlement.getExpectedCreditInBank());
-                    if (settlement.getSettlementReference().equals(becknOrder.getSettlementReference())){
-                        current = settlement;
-                    }
-                }
-
-
-                if (current != null) {
-                    becknOrder.setCollectionTransactionId(current.getCollectionTxnId());
-                }
-                becknOrder.setOrderReconStatus(OrderReconStatus.FINALE);
-                if (settlementAmountExpected.doubleValue() > shopifyOrder.getSettledAmount()){
-                    becknOrder.setCounterpartyReconStatus(ReconStatus.UNDER_PAID);
-                    Amount diff = new Amount();
-                    diff.setValue(settlementAmountExpected.doubleValue()-shopifyOrder.getSettledAmount());
-                    diff.setCurrency("INR");
-                    becknOrder.setCounterpartyDiffAmount(diff);
-                }else {
-                    becknOrder.setCounterpartyReconStatus(ReconStatus.PAID);
-                    becknOrder.setCounterpartyDiffAmount(null);
-                }
-            }
-            ((NetworkApiAdaptor)networkAdaptor.getApiAdaptor()).callback(eCommerceAdaptor,on_receiver_recon);
-
-        }
 
         final Request request = new Request();
         request.setMessage(new Message());

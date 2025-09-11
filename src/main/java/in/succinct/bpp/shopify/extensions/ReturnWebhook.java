@@ -4,10 +4,12 @@ import com.venky.core.string.StringUtil;
 import com.venky.extension.Registry;
 import com.venky.swf.path.Path;
 import in.succinct.beckn.Context;
+import in.succinct.beckn.Invoice;
+import in.succinct.beckn.Invoice.Dispute;
+import in.succinct.beckn.Invoice.Dispute.Disputes;
+import in.succinct.beckn.Invoice.Dispute.Status;
 import in.succinct.beckn.Message;
 import in.succinct.beckn.Order;
-import in.succinct.beckn.Order.Return;
-import in.succinct.beckn.Order.Return.ReturnStatus;
 import in.succinct.beckn.Request;
 import in.succinct.beckn.ReturnReasons.ReturnRejectReason;
 import in.succinct.bpp.core.adaptor.api.NetworkApiAdaptor;
@@ -28,6 +30,29 @@ public class ReturnWebhook extends ShopifyWebhook {
         Registry.instance().registerExtension("in.succinct.bpp.shell.return_hook",new ReturnWebhook());
     }
 
+    private static final String RETURN_STATUS_CANCELLED = "CANCELLED";
+    private static final String RETURN_STATUS_CLOSED = "CLOSED";
+    private static final String RETURN_STATUS_DECLINED = "DECLINED";
+    private static final String RETURN_STATUS_OPEN = "OPEN";
+    private static final String RETURN_STATUS_REQUESTED = "REQUESTED";
+    Status getDisputeStatus(JSONObject eReturn){
+        String returnStatus = ((String)eReturn.get("status")).toUpperCase();
+        Status status = null;
+        switch (returnStatus){
+            case RETURN_STATUS_OPEN,RETURN_STATUS_REQUESTED -> {
+                status =  Status.Open;
+            }
+            case RETURN_STATUS_CANCELLED , RETURN_STATUS_DECLINED -> {
+                status = Status.Closed;
+            }
+            case RETURN_STATUS_CLOSED -> {
+                // Can be partitalAuthorized
+                status = Status.AmountAuthorized;
+            }
+        }
+        return status;
+    }
+    
     public void hook(ECommerceAdaptor eCommerceAdaptor, NetworkAdaptor networkAdaptor, Path path, String payload) {
         String event = path.parameter();
         /*if (ObjectUtil.equals(path.getHeaders().get("X-Shopify-Topic"),"returns/request")) {
@@ -52,41 +77,46 @@ public class ReturnWebhook extends ShopifyWebhook {
         Date now = new Date();
         Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),true);
         lastKnownOrder.setUpdatedAt(now);
-        Return returnReference = lastKnownOrder.getReturns().get(returnId); // Created in update api
-        returnReference.setReturnStatus(ReturnStatus.convertor.valueOf(((String)eReturn.get("status")).toUpperCase() ));
-        if (returnReference.getReturnStatus() == ReturnStatus.DECLINED){
+        
+        Invoice invoice = lastKnownOrder.getInvoice(lastKnownOrder.getFulfillments().get(0).getId());
+        Disputes disputes  = invoice.getDisputes(true);
+        
+        
+        Dispute returnReference = disputes.get(returnId); // Created in update api
+        
+        returnReference.setStatus(getDisputeStatus(eReturn));
+        
+        if (returnReference.getStatus() == Status.Closed){
             ReturnDecline decline = new ReturnDecline((JSONObject) eReturn.get("decline"));
             switch (decline.getReturnDeclineReason()){
                 case FINAL_SALE:
-                    returnReference.setReturnRejectReason(ReturnRejectReason.FINAL_SALE);
+                    returnReference.setRejectReason(ReturnRejectReason.FINAL_SALE.toString());
                     break;
                 case RETURN_PERIOD_ENDED:
-                    returnReference.setReturnRejectReason(ReturnRejectReason.RETURN_PERIOD_ENDED);
+                    returnReference.setRejectReason(ReturnRejectReason.RETURN_PERIOD_ENDED.toString());
                     break;
                 case OTHER:
                     if (decline.getNote() != null) {
                         String note = decline.getNote().toUpperCase();
                         if (note.contains("DAMAGE")){
                             if (note.contains("PACKAGE")) {
-                                returnReference.setReturnRejectReason(ReturnRejectReason.ITEM_PACKAGING_DAMAGED);
+                                returnReference.setRejectReason(ReturnRejectReason.ITEM_PACKAGING_DAMAGED.toString());
                             }else {
-                                returnReference.setReturnRejectReason(ReturnRejectReason.ITEM_DAMAGED);
+                                returnReference.setRejectReason(ReturnRejectReason.ITEM_DAMAGED.toString());
                             }
                         }else if (note.contains("USED")){
-                            returnReference.setReturnRejectReason(ReturnRejectReason.ITEM_USED);
+                            returnReference.setRejectReason(ReturnRejectReason.ITEM_USED.toString());
                         }else if (note.matches("IN[ \t]*COMPLETE")){
-                            returnReference.setReturnRejectReason(ReturnRejectReason.ITEM_INCOMPLETE);
+                            returnReference.setRejectReason(ReturnRejectReason.ITEM_INCOMPLETE.toString());
                         }
                     }
                     break;
                 default:
                     break;
             }
-            if (returnReference.getReturnRejectReason() == null){
-                returnReference.setReturnRejectReason(ReturnRejectReason.FINAL_SALE);
+            if (returnReference.getRejectReason() == null){
+                returnReference.setRejectReason(ReturnRejectReason.FINAL_SALE.toString());
             }
-
-
         }
         localOrderSynchronizer.sync(eCommerceAdaptor.getBecknTransactionId(shopifyOrder),lastKnownOrder);/// getBecknOrder uses lastKnownObject to update latestOrder object
 
@@ -105,7 +135,7 @@ public class ReturnWebhook extends ShopifyWebhook {
 
         //Fill any other attributes needed.
         //Send unsolicited on_status.
-        context.setMessageId(returnReference.getReturnMessageId() == null ? UUID.randomUUID().toString() : returnReference.getReturnMessageId());
+        context.setMessageId(returnReference.getDisputeMessageId() == null ? UUID.randomUUID().toString() : returnReference.getDisputeMessageId());
 
         Order finalOrder = eCommerceAdaptor.getBecknOrder(shopifyOrder); // Refreshed Again. after updates to laskKnownOrder
         request.getMessage().setOrder(finalOrder); //updated order.
