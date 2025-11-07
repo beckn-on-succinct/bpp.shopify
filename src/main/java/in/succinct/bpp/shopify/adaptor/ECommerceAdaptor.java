@@ -24,6 +24,8 @@ import in.succinct.beckn.Cancellation;
 import in.succinct.beckn.Cancellation.CancelledBy;
 import in.succinct.beckn.CancellationReasons.CancellationReasonCode;
 import in.succinct.beckn.Catalog;
+import in.succinct.beckn.Categories;
+import in.succinct.beckn.Category;
 import in.succinct.beckn.Circle;
 import in.succinct.beckn.City;
 import in.succinct.beckn.Contact;
@@ -158,6 +160,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         ECommerceSDK helper  = new ECommerceSDK(user.getCredentials(true,getCredentialAttributes()));
         ShopifyOrder appResponse = save(request,true);
+        if (response.getMessage() == null){
+            response.setMessage(new Message());
+        }
         response.getMessage().setOrder(convert(helper,appResponse));
     }
     
@@ -277,6 +282,8 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             }
             
             provider.setPayments(getPayments(company));
+            provider.setCategories(new Categories());
+            
             provider.setItems(getItems(provider,new ECommerceSDK(u.getCredentials(true,getCredentialAttributes()))));
             
             TypeConverter<Boolean> converter =  company.getReflector().getJdbcTypeHelper().getTypeRef(boolean.class).getTypeConverter();
@@ -411,6 +418,15 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     
     private Items getItems(Provider provider, ECommerceSDK helper) {
         Items items = new Items();
+        Domain domain = null;
+        
+        for (Domain d : NetworkAdaptorFactory.getInstance().getAdaptor().getDomains()){
+            if (ObjectUtil.equals(d.getDomainCategory(),DomainCategory.BUY_MOVABLE_GOODS)){
+                domain = d;
+                break;
+            }
+        }
+        
         
         Store store  = helper.getStore();
         InventoryLocations inventoryLocations = helper.getInventoryLocations();
@@ -428,7 +444,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 if (!inventoryItem.isTracked() && inventoryLocations.get(variant.getInventoryItemId()).isEmpty()) {
                     inventoryLocations.get(variant.getInventoryItemId()).add(store.getPrimaryLocationId());
                 }
-                
+                Domain productDomain = domain;
                 inventoryLocations.get(variant.getInventoryItemId()).forEach(location_id -> {
                     String itemId = BecknIdHelper.getBecknId(variant.getId(), getSubscriber(), Entity.item);
                     
@@ -494,14 +510,17 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                         for (Location location : provider.getLocations()) {
                             item.getLocationIds().add(location.getId());
                         }
-
+                        
                         if (inventoryItem.getCountryCodeOfOrigin() == null) {
                             //If no custom information is set, then assume store's country  as the origin of the product.
                             item.setCountryOfOrigin(Country.findByISO(provider.getLocations().get(0).getAddress().getCountry()).getIsoCode());
                         } else {
                             item.setCountryOfOrigin(Country.findByISO(inventoryItem.getCountryCodeOfOrigin()).getIsoCode());
                         }
-                        item.setTag("DOMAIN","CATEGORY","BUY_MOVABLE_GOODS");
+                        item.setTag("DOMAIN","CATEGORY",DomainCategory.BUY_MOVABLE_GOODS.name());
+                        if (!ObjectUtil.isVoid(productDomain)){
+                            item.setTag ("DOMAIN","ID",productDomain.getId());
+                        }
                         
                         items.add(item);
                         
@@ -510,7 +529,20 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                     
                     
                     for (String tag : product.getTagSet()) {
-                        item.setTag("general_attributes", tag, true);
+                        String token = tag.toUpperCase();
+                        item.getCategoryIds().add(token);
+                        
+                        if (provider.getCategories().get(token) == null){
+                            Category category = provider.getObjectCreator().create(Category.class);
+                            category.setId(token);
+                            category.setDescriptor(provider.getObjectCreator().create(Descriptor.class));
+                            Descriptor descriptor = category.getDescriptor();
+                            descriptor.setName(token);
+                            descriptor.setCode(token);
+                            descriptor.setShortDesc(token);
+                            descriptor.setLongDesc(token);
+                            provider.getCategories().add(category);
+                        }
                     }
                     item.setTag("general_attributes", "product_id", variant.getProductId());
 
@@ -710,23 +742,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             helper.delete(shopifyOrder);
         }
         
-        setShipping(bo.getFulfillment(), shopifyOrder);
-        
-        if (bo.getBilling() == null) {
-            bo.setBilling(new Billing());
-        }
-        if (bo.getBilling().getAddress() == null) {
-            bo.getBilling().setAddress(bo.getFulfillment()._getEnd().getLocation().getAddress());
-        }
-        if (bo.getBilling().getName() == null) {
-            bo.getBilling().setName(bo.getBilling().getAddress().getName());
-        }
+        setShipping(bo, shopifyOrder);
         
         setBilling(bo.getBilling(), shopifyOrder);
         Bucket totalPrice = new Bucket();
         Bucket tax = new Bucket();
         shopifyOrder.setLocationId(helper.getStore().getPrimaryLocationId());
-        
+        /*
         {
             double deliverycharges = getDeliveryCharges(bo.getFulfillment());
             
@@ -757,6 +779,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             totalPrice.increment(isTaxIncludedInPrice()? deliverycharges : deliverycharges + taxIncluded);
             tax.increment(taxIncluded);
         }
+        */
         
         shopifyOrder.setTaxesIncluded(isTaxIncludedInPrice());
         
@@ -774,7 +797,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 tax.increment(lineTax);
                 
                 String[] taxHeads = new String[]{"IGST"};
-                if (ObjectUtil.equals(storeLocation.getState().getName(), bo.getBilling().getState().getName())) {
+                if (ObjectUtil.equals(storeLocation.getState().getName(), bo.getBilling().getAddress().getState())) {
                     taxHeads = new String[]{"SGST", "CGST"};
                 }
                 int numHeads = taxHeads.length;
@@ -790,7 +813,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             });
         }
         shopifyOrder.setTotalTax(tax.doubleValue());
-        
+        /*
         if (Config.instance().isDevelopmentEnvironment()) {
             shopifyOrder.setTest(true);
             shopifyOrder.setTransactions(new Transactions());
@@ -802,7 +825,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 setAmount(totalPrice.doubleValue());
             }});
         }
-        
+        */
         LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).sync(request.getContext().getTransactionId(), bo);
         if (!shopifyOrder.getLineItems().isEmpty()) {
             saveDraftOrder(helper,shopifyOrder);
@@ -823,8 +846,8 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         JSONObject inspectQuantity = (JSONObject) item.getInner().get("quantity");
         if (inspectQuantity.containsKey("count")) {
             lineItem.setQuantity(item.getQuantity().getCount());
-        } else if (inspectQuantity.containsKey("allocated")) {
-            lineItem.setQuantity(item.getItemQuantity().getAllocated().getCount());
+        } else if (inspectQuantity.containsKey("selected")) {
+            lineItem.setQuantity(item.getItemQuantity().getSelected().getCount());
         }
 
         lineItem.setProductId(doubleTypeConverter.valueOf(item.getTags().get("product_id")).longValue());
@@ -839,11 +862,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     }
    private void saveDraftOrder(ECommerceSDK helper,ShopifyOrder draftOrder) {
         JSONObject dro = new JSONObject();
-        dro.put("order", draftOrder.getInner());
+        dro.put("draft_order", draftOrder.getInner());
 
-        JSONObject outOrder = helper.post("/orders.json", dro);
-        ShopifyOrder oDraftOrder = new ShopifyOrder((JSONObject) outOrder.get("order"));
+        JSONObject outOrder = helper.post("/draft_orders.json", dro);
+        ShopifyOrder oDraftOrder = new ShopifyOrder((JSONObject) outOrder.get("draft_order"));
         draftOrder.setPayload(oDraftOrder.getInner().toString());
+        draftOrder.setDraft(true);
 
     }
     private double getDeliveryCharges(Fulfillment fulfillment) {
@@ -852,7 +876,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             return 0;
         }
         TagGroup estimatedDeliveryCharges = tagGroups.get("ESTIMATED_DELIVERY_CHARGES");
-        if (estimatedDeliveryCharges == null){
+        if (estimatedDeliveryCharges == null || estimatedDeliveryCharges.getList()  == null || estimatedDeliveryCharges.getList().isEmpty()){
             return 0;
         }
         double min = Double.POSITIVE_INFINITY;
@@ -865,7 +889,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         return min;
     }
     
-    public void setShipping(Fulfillment source, ShopifyOrder target) {
+    public void setShipping(Order bo, ShopifyOrder target) {
+        Fulfillment source = bo.getFulfillment();
+        
         if (source == null) {
             return;
         }
@@ -902,6 +928,12 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             if (address.getCountry() == null) {
                 address.setCountry(source._getStart().getLocation().getCountry().getName());
             }
+            if (address.getState() == null ){
+                address.setState(source._getStart().getLocation().getState().getName());
+            }
+            if (address.getCity() == null){
+                address.setCity(source._getStart().getLocation().getCity().getName());
+            }
             Country country = Country.findByName(address.getCountry());
             com.venky.swf.plugins.collab.db.model.config.State state = com.venky.swf.plugins.collab.db.model.config.State.findByCountryAndName(country.getId(), address.getState());
             com.venky.swf.plugins.collab.db.model.config.City city = com.venky.swf.plugins.collab.db.model.config.City.findByStateAndName(state.getId(), address.getCity());
@@ -910,7 +942,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             shipping.setAddress1(lines[0]);
             shipping.setAddress2(lines[1]);
             
-            shipping.setCity(city.getName());
+            shipping.setCity(address.getCity());
             shipping.setProvinceCode(state.getCode());
             shipping.setProvince(state.getName());
             shipping.setZip(address.getAreaCode());
@@ -925,6 +957,19 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             shipping.setLatitude(gps.getLat().doubleValue());
             shipping.setLongitude(gps.getLng().doubleValue());
         }
+        
+        
+        if (bo.getBilling() == null) {
+            bo.setBilling(new Billing());
+        }
+        if (bo.getBilling().getAddress() == null) {
+            bo.getBilling().setAddress(new Address());
+        }
+        bo.getBilling().getAddress().update(address,false);
+        if (bo.getBilling().getName() == null) {
+            bo.getBilling().setName(bo.getBilling().getAddress().getName());
+        }
+        
     }
     
      public void setBilling(Billing source, ShopifyOrder target) {
@@ -932,6 +977,8 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         if (source == null) {
             return;
         }
+        
+        
         ShopifyOrder.Address billing = new ShopifyOrder.Address();
         target.setBillingAddress(billing);
 
@@ -945,7 +992,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
 
             Country country = Country.findByName(source.getAddress().getCountry());
             com.venky.swf.plugins.collab.db.model.config.State state = com.venky.swf.plugins.collab.db.model.config.State.findByCountryAndName(country.getId(), source.getAddress().getState());
-            com.venky.swf.plugins.collab.db.model.config.City city = com.venky.swf.plugins.collab.db.model.config.City.findByStateAndName(state.getId(), source.getAddress().getCity());
+            com.venky.swf.plugins.collab.db.model.config.City city =  com.venky.swf.plugins.collab.db.model.config.City.findByStateAndName(state.getId(), source.getAddress().getCity());
 
             billing.setCity(city.getName());
             billing.setProvince(city.getState().getName());

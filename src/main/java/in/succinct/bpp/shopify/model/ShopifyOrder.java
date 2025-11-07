@@ -54,6 +54,12 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("billing_address",billing_address);
     }
 
+    public boolean isDraft(){
+        return getExtendedAttributes().getBoolean("draft");
+    }
+    public void setDraft(boolean draft){
+        getExtendedAttributes().set("draft",draft);
+    }
 
     public String getCurrency(){
         return get("currency");
@@ -138,7 +144,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
 
     public Fulfillments getFulfillments(){
-        return get(Fulfillments.class, "fulfillments");
+        return get(Fulfillments.class, "fulfillments",true);
     }
     public void setFulfillments(Fulfillments fulfillments){
         set("fulfillments",fulfillments);
@@ -558,6 +564,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
     public void loadMetaFields(ECommerceSDK helper) {
         Metafields metafields = getMetafields();
+        if (isDraft()) {
+            return;
+        }
         Transactions transactions = getTransactions();
         if (transactions == null){
             JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", StringUtil.valueOf(getId())), new JSONObject());
