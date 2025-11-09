@@ -53,7 +53,6 @@ import in.succinct.beckn.Payment.CollectedBy;
 import in.succinct.beckn.Payment.Params;
 import in.succinct.beckn.Payment.PaymentStatus;
 import in.succinct.beckn.Payment.PaymentTransaction;
-import in.succinct.beckn.Payment.PaymentTransaction.PaymentTransactions;
 import in.succinct.beckn.Payments;
 import in.succinct.beckn.Person;
 import in.succinct.beckn.Price;
@@ -65,7 +64,6 @@ import in.succinct.beckn.SellerException;
 import in.succinct.beckn.SellerException.NoDataAvailable;
 import in.succinct.beckn.State;
 import in.succinct.beckn.TagGroup;
-import in.succinct.beckn.TagGroups;
 import in.succinct.bpp.core.adaptor.CommerceAdaptor;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizer;
 import in.succinct.bpp.core.db.model.LocalOrderSynchronizerFactory;
@@ -83,11 +81,9 @@ import in.succinct.bpp.shopify.model.ShopifyOrder;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItem;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItems;
 import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
-import in.succinct.bpp.shopify.model.ShopifyOrder.ShippingLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLines;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Transaction;
-import in.succinct.bpp.shopify.model.ShopifyOrder.Transactions;
 import in.succinct.bpp.shopify.model.Store;
 import in.succinct.onet.core.adaptor.NetworkAdaptor.Domain;
 import in.succinct.onet.core.adaptor.NetworkAdaptor.DomainCategory;
@@ -118,7 +114,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }};
     }
     
-    final String ADAPTER_KEY = "in.succinct.bpp.shopify";
     
     public Map<String, String> getCredentials(User user) {
         return user == null ? new HashMap<>() : user.getCredentials(true, getCredentialAttributes());
@@ -174,6 +169,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         ECommerceSDK helper = new ECommerceSDK(user.getCredentials(true,getCredentialAttributes()));
         ShopifyOrder latest = findShopifyOrder(helper,order);
         Order current = convert(helper,latest);
+        if (response.getMessage() == null){
+            response.setMessage(new Message());
+        }
         response.getMessage().setOrder(current);
         
     }
@@ -237,7 +235,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }});
     }
     
-    public static final String COD = "COD";
     public static final String PREPAID = "PRE-PAID";
     public static final String POST_DELIVERY = "POST-DELIVERY";
     
@@ -257,7 +254,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 }
             }});
             provider.setLocations(getLocations(company));
-            provider.setFulfillments(getFulfillments(company, provider.getLocations()));
+            provider.setFulfillments(getFulfillments(company));
             Facility facility = company.getFacilities().get(0);
             for (Fulfillment fulfillment : provider.getFulfillments()) {
                 fulfillment.setContact(new Contact(){{
@@ -322,19 +319,19 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 add(prepaid);
             }
             if (company.isPostDeliverySupported()) {
-                Payment prepaid = new Payment();
-                prepaid.setCollectedBy(CollectedBy.BPP);
-                prepaid.setInvoiceEvent(FulfillmentStatus.Completed);
-                prepaid.setId(POST_DELIVERY);
+                Payment cod = new Payment();
+                cod.setCollectedBy(CollectedBy.BPP);
+                cod.setInvoiceEvent(FulfillmentStatus.Completed);
+                cod.setId(POST_DELIVERY);
                 if (!ObjectUtil.isVoid(company.getVirtualPaymentAddress())) {
-                    prepaid.setParams(new Params() {{
+                    cod.setParams(new Params() {{
                         setVirtualPaymentAddress(company.getVirtualPaymentAddress());
                         setBankAccountName(company.getAccountHolderName());
                         setMcc(company.getMerchantCategoryCode());
                         setCurrency(company.getFacilities().get(0).getCountry().getWorldCurrency().getCode());
                     }});
                 }
-                add(prepaid);
+                add(cod);
             }
         }};
     }
@@ -392,7 +389,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         return address;
     }
     
-    private Fulfillments getFulfillments(Company company, Locations locations) {
+    private Fulfillments getFulfillments(Company company) {
         return new Fulfillments() {{
             if (company.isHomeDeliverySupported()) {
                 Fulfillment home_delivery = new Fulfillment();
@@ -599,7 +596,11 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         LocalOrderSynchronizer localOrderSynchronizer = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber());
         
         Order lastKnownOrder = localOrderSynchronizer.getLastKnownOrder(transactionId, true);
-        localOrderSynchronizer.setLocalOrderId(transactionId, eCommerceOrder.getId());
+        if (eCommerceOrder.isDraft()) {
+            localOrderSynchronizer.setLocalDraftOrderId(transactionId, eCommerceOrder.getId());
+        }else {
+            localOrderSynchronizer.setLocalOrderId(transactionId, eCommerceOrder.getId());
+        }
         
         Order order = new Order();
         order.update(lastKnownOrder);
@@ -667,8 +668,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         } else {
             payment.getParams().setAmount(eCommerceOrder.getTotalPrice());
         }
-        payment = order.getPayments().get(0);
-
+        
         Invoices invoices = order.getInvoices();
         if (invoices.isEmpty()){
             LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).updateOrderStatus(order); // Ensure invoices are created.
@@ -707,10 +707,13 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     
     public ShopifyOrder findShopifyOrder(ECommerceSDK helper, Order order){
         String shopifyOrderId = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(order);
-        if (shopifyOrderId.startsWith("gid:")) {
-            shopifyOrderId = shopifyOrderId.substring(shopifyOrderId.lastIndexOf("/") + 1);
+        String draftOrderId = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalDraftOrderId(order);
+        if (shopifyOrderId != null){
+            return helper.findShopifyOrder(shopifyOrderId, false);
+        }else if (draftOrderId != null){
+            return helper.findShopifyOrder(draftOrderId,true);
         }
-        return helper.findShopifyOrder(shopifyOrderId);
+        return null;
     }
     //From beckn to shopify
     public ShopifyOrder save(Request request, boolean create){
@@ -721,7 +724,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         User user = getUser(request);
         ECommerceSDK helper = new ECommerceSDK(user.getCredentials(true,getCredentialAttributes()));
         
-        Fulfillment f = bo.getFulfillment();
         Location storeLocation = bo.getProviderLocation();
         
         shopifyOrder.setId(LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(request.getContext().getTransactionId()));
@@ -748,44 +750,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         Bucket totalPrice = new Bucket();
         Bucket tax = new Bucket();
         shopifyOrder.setLocationId(helper.getStore().getPrimaryLocationId());
-        /*
-        {
-            double deliverycharges = getDeliveryCharges(bo.getFulfillment());
-            
-            
-            ShippingLine shippingLine = new ShippingLine();
-            shippingLine.setTitle("Standard");
-            shippingLine.setPrice(deliverycharges);
-            shippingLine.setCode("Local Delivery");
-            shippingLine.setPhone(shopifyOrder.getShippingAddress().getPhone());
-            shippingLine.setSource("shopify");
-            shippingLine.setTaxLines(new TaxLines());
-            
-            TaxLine taxLine = new TaxLine();
-            taxLine.setRate(0.18);
-            taxLine.setTitle("IGST");
-            
-            double factor = isTaxIncludedInPrice()? (taxLine.getRate() / (1 + taxLine.getRate())) : taxLine.getRate();
-            double taxIncluded = deliverycharges * factor;
-            
-            
-            taxLine.setPrice(taxIncluded);
-            
-            
-            shippingLine.getTaxLines().add(taxLine);
-            
-            shopifyOrder.setShippingLine(shippingLine);
-            
-            totalPrice.increment(isTaxIncludedInPrice()? deliverycharges : deliverycharges + taxIncluded);
-            tax.increment(taxIncluded);
-        }
-        */
-        
         shopifyOrder.setTaxesIncluded(isTaxIncludedInPrice());
         
         if (bo.getItems() != null) {
             bo.getItems().forEach(boItem -> {
-                JSONObject inspectQuantity = (JSONObject) boItem.getInner().get("quantity");
                 
                 LineItem lineItem = addItem(shopifyOrder, boItem);
                 lineItem.setTaxLines(new TaxLines());
@@ -807,25 +775,10 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                     taxLine.setRate(taxRate / numHeads);
                     taxLine.setTitle(head);
                     lineItem.getTaxLines().add(taxLine);
-                    
                 }
-                
             });
         }
         shopifyOrder.setTotalTax(tax.doubleValue());
-        /*
-        if (Config.instance().isDevelopmentEnvironment()) {
-            shopifyOrder.setTest(true);
-            shopifyOrder.setTransactions(new Transactions());
-            Transactions transactions = shopifyOrder.getTransactions();
-            transactions.add(new Transaction() {{
-                setTest(true);
-                setKind("authorization");
-                setStatus("success");
-                setAmount(totalPrice.doubleValue());
-            }});
-        }
-        */
         LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).sync(request.getContext().getTransactionId(), bo);
         if (!shopifyOrder.getLineItems().isEmpty()) {
             saveDraftOrder(helper,shopifyOrder);
@@ -869,24 +822,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         draftOrder.setPayload(oDraftOrder.getInner().toString());
         draftOrder.setDraft(true);
 
-    }
-    private double getDeliveryCharges(Fulfillment fulfillment) {
-        TagGroups tagGroups = fulfillment.getTags();
-        if (tagGroups == null){
-            return 0;
-        }
-        TagGroup estimatedDeliveryCharges = tagGroups.get("ESTIMATED_DELIVERY_CHARGES");
-        if (estimatedDeliveryCharges == null || estimatedDeliveryCharges.getList()  == null || estimatedDeliveryCharges.getList().isEmpty()){
-            return 0;
-        }
-        double min = Double.POSITIVE_INFINITY;
-        for (TagGroup tg : estimatedDeliveryCharges.getList()){
-            double value = Double.parseDouble(tg.getValue());
-            if (min > value){
-                min = value;
-            }
-        }
-        return min;
     }
     
     public void setShipping(Order bo, ShopifyOrder target) {
@@ -936,7 +871,6 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             }
             Country country = Country.findByName(address.getCountry());
             com.venky.swf.plugins.collab.db.model.config.State state = com.venky.swf.plugins.collab.db.model.config.State.findByCountryAndName(country.getId(), address.getState());
-            com.venky.swf.plugins.collab.db.model.config.City city = com.venky.swf.plugins.collab.db.model.config.City.findByStateAndName(state.getId(), address.getCity());
             
             String[] lines = address._getAddressLines(2);
             shipping.setAddress1(lines[0]);

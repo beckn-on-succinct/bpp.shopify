@@ -4,7 +4,6 @@ import com.venky.core.math.DoubleUtils;
 import com.venky.core.string.StringUtil;
 import com.venky.core.util.Bucket;
 import com.venky.core.util.ObjectUtil;
-import com.venky.swf.db.Database;
 import com.venky.swf.plugins.collab.db.model.config.City;
 import com.venky.swf.plugins.collab.db.model.config.Country;
 import com.venky.swf.plugins.collab.db.model.config.State;
@@ -22,7 +21,6 @@ import in.succinct.beckn.TagGroup;
 import in.succinct.beckn.TagGroups;
 import in.succinct.bpp.core.db.model.ProviderConfig;
 import in.succinct.bpp.shopify.adaptor.ECommerceSDK;
-import in.succinct.bpp.shopify.model.Products.Metafield;
 import in.succinct.bpp.shopify.model.Products.Metafields;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
@@ -41,6 +39,21 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     public ShopifyOrder(JSONObject eCommerceOrder) {
         super(eCommerceOrder);
     }
+    //Only from draft ortders
+    public ShopifyOrder getOrder(){
+        return get(ShopifyOrder.class, "order");
+    }
+    public void setOrder(ShopifyOrder shopify_order){
+        set("order",shopify_order);
+    }
+    
+    public String getOrderId(){
+        return get("order_id");
+    }
+    public void setOrderId(String order_id){
+        set("order_id",order_id);
+    }
+    // Only for draft orders.
 
 
     public String getAppId(){
@@ -331,13 +344,6 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         set("invoice_sent_at",invoice_sent_at,TIMESTAMP_FORMAT);
     }
 
-    public String getInvoiceUrl(){
-        return get("invoice_url");
-    }
-    public void setInvoiceUrl(String invoice_url){
-        set("invoice_url",invoice_url);
-    }
-
 
     public ShopifyRefunds getRefunds(){
         return get(ShopifyRefunds.class, "refunds");
@@ -418,7 +424,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         }};
 
         if (status == null){
-            if (getFulfillments() != null && getFulfillments().size() > 0){
+            if (getFulfillments() != null && !getFulfillments().isEmpty()){
                 for (Fulfillment fulfillment : getFulfillments()){
                     String shipmentStatus = fulfillment.getShipmentStatus();
                     String fulfilmentStatus = fulfillment.getStatus();
@@ -434,13 +440,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                     status = Status.Cancelled;
                 } else if ("fulfilled".equals(s)) {
                     status = Status.Completed;
-                } else if (!getFulfillments().isEmpty() && isPickedUp()){
-                    status = Status.In_Transit;
-                } else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
-                    status = Status.Prepared;
-                }else if (isPaid() ||isCod()){
+                } else if (!isDraft()){
                     status = Status.Accepted;
-                }else {
+                } else {
                     status = Status.Created;
                 }
             }
@@ -483,8 +485,6 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 }else if (isPickedUp()){
                     //Lets mark if picked up rather than fulfilled. Treat fulfilled as delivered.
                     status = FulfillmentStatus.In_Transit;
-                }else if (!ObjectUtil.isVoid(getInvoiceUrl())) {
-                    status = FulfillmentStatus.Prepared;
                 }else {
                     status = FulfillmentStatus.Preparing;
                 }
@@ -492,41 +492,11 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         }
         return status;
     }
-
-    public boolean isSettled(){
-        return getBoolean("settled");
-    }
-    public void setSettled(boolean settled){
-        set("settled",settled);
-    }
-
-    public boolean isDelivered(){
-        return getBoolean("delivered");
-    }
-    public void setDelivered(boolean delivered){
-        set("delivered",delivered);
-    }
-
-    public boolean isCod(){
-        return getBoolean("cod");
-    }
-    public void setCod(boolean cod){
-        set("cod",cod);
-    }
     public boolean isPickedUp(){
-        return getBoolean("picked_up");
+        return false;
     }
-    public void setPickedUp(boolean picked_up){
-        set("picked_up",picked_up);
-    }
+    
 
-
-    public String getTrackingUrl(){
-        return get("tracking_url");
-    }
-    public void setTrackingUrl(String tracking_url){
-        set("tracking_url",tracking_url);
-    }
 
     public boolean isPaid(){
         ShopifyOrder shopifyOrder = this;
@@ -563,7 +533,6 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
 
     public void loadMetaFields(ECommerceSDK helper) {
-        Metafields metafields = getMetafields();
         if (isDraft()) {
             return;
         }
@@ -573,45 +542,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
             setTransactions(transactions);
         }
-
-        if (metafields == null ){
-            JSONObject meta = helper.get(String.format("/orders/%s/metafields.json",StringUtil.valueOf(getId())),new JSONObject());
-            JSONArray metafieldArray = (JSONArray) meta.get("metafields");
-            metafields = new Metafields(metafieldArray);
-            setMetafields(metafields);
-
-            for (Metafield m : metafields){
-                if (m.getKey().equals("settled")) {
-                    setSettled(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
-                }else if (m.getKey().equals("invoice_url")){
-                    JSONObject o = helper.graphql(String.format("{node(id:\"%s\"){ id ... on %s { url  , alt ,fileStatus} }}",m.getValue(),m.getValue().split("/")[3]));
-                    JSONObject data = (JSONObject) o.get("data");
-                    JSONObject node = (JSONObject) data.get("node");
-                    if (node != null) {
-                        setInvoiceUrl((String) node.get("url"));
-                    }
-                }else if (m.getKey().equals("delivered")){
-                    setDelivered(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
-                }else if (m.getKey().equals("picked_up")){
-                    setPickedUp(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
-                }else if (m.getKey().equals("tracking_url")){
-                    setTrackingUrl(m.getValue());
-                }else if (m.getKey().equals("settled_amount")) {
-                    setSettledAmount(Database.getJdbcTypeHelper("").getTypeRef(Double.class).getTypeConverter().valueOf(m.getValue()));
-                }else if (m.getKey().equals("cod")){
-                    setCod(Database.getJdbcTypeHelper("").getTypeRef(Boolean.class).getTypeConverter().valueOf(m.getValue()));
-                }
-            }
-        }
-
     }
-    public double getSettledAmount(){
-        return getDouble("settled_amount");
-    }
-    public void setSettledAmount(double settled_amount){
-        set("settled_amount",settled_amount);
-    }
-
+    
+    
 
     public static class ShippingLines extends BecknObjects<ShippingLine>{
         public ShippingLines(){

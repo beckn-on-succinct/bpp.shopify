@@ -10,7 +10,6 @@ import com.venky.swf.db.annotations.column.ui.mimes.MimeType;
 import com.venky.swf.integration.api.Call;
 import com.venky.swf.integration.api.HttpMethod;
 import com.venky.swf.integration.api.InputFormat;
-import in.succinct.beckn.Order;
 import in.succinct.bpp.core.adaptor.TimeSensitiveCache;
 import in.succinct.bpp.shopify.model.Products;
 import in.succinct.bpp.shopify.model.Products.InventoryItem;
@@ -34,12 +33,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,22 +46,27 @@ public class ECommerceSDK {
         this.creds = creds;
     }
     
+    @SuppressWarnings("unused")
     private final TypeConverter<Double> doubleTypeConverter = Database.getJdbcTypeHelper("").getTypeRef(double.class).getTypeConverter();
+    @SuppressWarnings("unused")
     private final TypeConverter<Boolean> booleanTypeConverter  = Database.getJdbcTypeHelper("").getTypeRef(boolean.class).getTypeConverter();
 
     public <T extends JSONAware> T post(String relativeUrl, JSONObject parameter ){
         return post(relativeUrl,parameter,new IgnoreCaseMap<>());
     }
+    @SuppressWarnings("unused")
     public <T extends JSONAware> T putViaPost(String relativeUrl, JSONObject parameter ){
         return post(relativeUrl,parameter,new IgnoreCaseMap<>(){{
             put("X-HTTP-Method-Override","PUT");
         }});
     }
+    @SuppressWarnings("unused")
     public <T extends JSONAware> T putViaGet(String relativeUrl, JSONObject parameter ){
         return get(relativeUrl,parameter,new IgnoreCaseMap<>(){{
             put("X-HTTP-Method-Override","PUT");
         }});
     }
+    @SuppressWarnings({"unused", "UnusedReturnValue"})
     public <T extends JSONAware> T delete(String relativeUrl, JSONObject parameter ){
         return post(relativeUrl,parameter,new IgnoreCaseMap<>(){{
             put("X-HTTP-Method-Override","DELETE");
@@ -347,12 +349,28 @@ public class ECommerceSDK {
         }
         return products;
     }
-    public ShopifyOrder findShopifyOrder(String shopifyOrderId){
+    public ShopifyOrder findShopifyOrder(String shopifyOrderId, boolean draft){
         if (shopifyOrderId.startsWith("gid:")) {
             shopifyOrderId = shopifyOrderId.substring(shopifyOrderId.lastIndexOf("/") + 1);
         }
-        JSONObject response = get(String.format("/orders/%s.json", shopifyOrderId), new JSONObject());
-        return new ShopifyOrder((JSONObject) response.get("order"));
+        JSONObject response;
+        ShopifyOrder shopifyOrder ;
+        if (draft) {
+            response = get(String.format("/draft_orders/%s.json", shopifyOrderId), new JSONObject());
+            shopifyOrder = new ShopifyOrder((JSONObject) response.get("draft_order"));
+            shopifyOrder.setDraft(true);
+            if (shopifyOrder.getOrderId() != null ){
+                shopifyOrderId = shopifyOrder.getOrderId();
+            }else if (shopifyOrder.getOrder() != null){
+                shopifyOrderId = shopifyOrder.getOrder().getId();
+            }else {
+                return shopifyOrder;
+            }
+        }
+        response = get(String.format("/orders/%s.json", shopifyOrderId), new JSONObject());
+        shopifyOrder = new ShopifyOrder((JSONObject) response.get("order"));
+        shopifyOrder.setDraft(false);
+        return shopifyOrder;
     }
     
     private final TimeSensitiveCache cache = new TimeSensitiveCache(Duration.ofDays(1L));
