@@ -522,12 +522,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
         if (isDraft()) {
             return;
         }
-        Transactions transactions = getTransactions();
-        if (transactions == null ||transactions.isEmpty()){
-            JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", StringUtil.valueOf(getId())), new JSONObject());
-            transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
-            setTransactions(transactions);
-        }
+        JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", StringUtil.valueOf(getId())), new JSONObject());
+        Transactions transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
+        setTransactions(transactions);
     }
     
     

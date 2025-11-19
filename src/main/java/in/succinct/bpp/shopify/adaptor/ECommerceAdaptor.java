@@ -770,12 +770,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         if (paymentConfirmed){
             for (Payment orderPayment : order.getPayments()) {
-                if (orderPayment.getStatus() == PaymentStatus.PAID ) {
-                    orderPayment.setStatus(PaymentStatus.COMPLETE);
-                }
+                orderPayment.setStatus(PaymentStatus.COMPLETE);
             }
         }
-        
     }
     
     
