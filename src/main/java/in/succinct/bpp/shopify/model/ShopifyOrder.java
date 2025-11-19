@@ -48,7 +48,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
     }
     
     public String getOrderId(){
-        return get("order_id");
+        return StringUtil.valueOf(get("order_id"));
     }
     public void setOrderId(String order_id){
         set("order_id",order_id);
@@ -500,17 +500,9 @@ public class ShopifyOrder extends ShopifyObjectWithId {
 
     public boolean isPaid(){
         ShopifyOrder shopifyOrder = this;
-        PaymentTerms terms = shopifyOrder.getPaymentTerms();
-
-
-        if (terms    == null){
-            terms = new PaymentTerms();
-            terms.setAmount(shopifyOrder.getTotalPrice());
-            terms.setPaymentSchedules(new PaymentSchedules());
-        }
-        PaymentSchedules schedules = terms.getPaymentSchedules();
+        Bucket toPay = new Bucket();
+        toPay.increment(shopifyOrder.getTotalPrice());
         Bucket paid  = new Bucket();
-        Bucket toPay = new Bucket(terms.getAmount());
         if (shopifyOrder.getTransactions() != null) {
             for (Transaction t : shopifyOrder.getTransactions()) {
                 if (ObjectUtil.equals("capture", t.getKind())) {
@@ -522,13 +514,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
                 }
             }
         }
-        /*
-        for (PaymentSchedule schedule : schedules){
-            if (schedule.getCompletedAt() != null ) {
-                paid.increment(schedule.getAmount());
-            }
-        }
-        */
+        
         return DoubleUtils.compareTo(paid.doubleValue(), toPay.doubleValue())>= 0;
     }
 
@@ -537,7 +523,7 @@ public class ShopifyOrder extends ShopifyObjectWithId {
             return;
         }
         Transactions transactions = getTransactions();
-        if (transactions == null){
+        if (transactions == null ||transactions.isEmpty()){
             JSONObject transactionsJs = helper.get(String.format("/orders/%s/transactions.json", StringUtil.valueOf(getId())), new JSONObject());
             transactions = new Transactions((JSONArray) transactionsJs.get("transactions"));
             setTransactions(transactions);

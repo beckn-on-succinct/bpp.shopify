@@ -41,6 +41,7 @@ import in.succinct.beckn.Images;
 import in.succinct.beckn.Invoice;
 import in.succinct.beckn.Invoice.Invoices;
 import in.succinct.beckn.Item;
+import in.succinct.beckn.ItemQuantity;
 import in.succinct.beckn.Items;
 import in.succinct.beckn.Location;
 import in.succinct.beckn.Locations;
@@ -58,6 +59,7 @@ import in.succinct.beckn.Person;
 import in.succinct.beckn.Price;
 import in.succinct.beckn.Provider;
 import in.succinct.beckn.Providers;
+import in.succinct.beckn.Quantity;
 import in.succinct.beckn.Request;
 import in.succinct.beckn.Scalar;
 import in.succinct.beckn.SellerException;
@@ -81,6 +83,7 @@ import in.succinct.bpp.shopify.model.ShopifyOrder;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItem;
 import in.succinct.bpp.shopify.model.ShopifyOrder.LineItems;
 import in.succinct.bpp.shopify.model.ShopifyOrder.NoteAttributes;
+import in.succinct.bpp.shopify.model.ShopifyOrder.ShippingLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLine;
 import in.succinct.bpp.shopify.model.ShopifyOrder.TaxLines;
 import in.succinct.bpp.shopify.model.ShopifyOrder.Transaction;
@@ -200,8 +203,29 @@ public class ECommerceAdaptor extends CommerceAdaptor {
     
     
     @Override
-    public void update(Request request, Request response) {
-        throw new UnsupportedOperationException();
+    public void update(Request updateRequest, Request response) {
+       String target = updateRequest.getMessage().getUpdateTarget();
+       String action = updateRequest.getContext().getAction();
+       LocalOrderSynchronizer localOrderSynchronizer  = LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber());
+       
+       Order order = localOrderSynchronizer.getLastKnownOrder(updateRequest.getContext().getTransactionId(),true);
+        
+        if (ObjectUtil.equals(target,"invoices")){
+            for (Invoice invoice :updateRequest.getMessage().getOrder().getInvoices()){
+                Invoice persistedInvoice = order.getInvoices().get(invoice.getId());
+                if (persistedInvoice.getUnpaidAmount().doubleValue() > 0) {
+                    persistedInvoice.setPaymentTransactions(invoice.getPaymentTransactions());
+                }
+            }
+            localOrderSynchronizer.updateOrderStatus(order);
+        }else {
+            throw new RuntimeException("Action %s not supported for target %s".formatted(action,target));
+        }
+        if (response.getMessage() == null){
+            response.setMessage(new Message());
+        }
+        response.getMessage().setOrder(order);
+        //We are not updating Shopify. !!
     }
     
     @Override
@@ -267,7 +291,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 FulfillmentStop start = fulfillment._getStart();
                 if (start == null && !provider.getLocations().isEmpty()){
                     start = new FulfillmentStop();
-                    start.setLocation(provider.getLocations().get(0));
+                    Location providerLocation = new Location();
+                    providerLocation.update(provider.getLocations().get(0));
+                    start.setLocation(providerLocation);// Dont carry same reference.!!
                     fulfillment._setStart(start);
                 }
                 if (start != null) {
@@ -639,7 +665,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                 }
             }
         }
-        
+        ensureDeliveryItem(order,eCommerceOrder);
         
         setPayment(order, eCommerceOrder);
         
@@ -653,26 +679,53 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         return order;
     }
     
+    private void ensureDeliveryItem(Order order, ShopifyOrder eCommerceOrder) {
+        Item deliveryItem= null;
+        for (Item item : order.getItems()) {
+            if (item.getDescriptor().getName().matches("^DELIVERY")){
+                deliveryItem = item;
+            }
+        }
+        Item tmpdeliveryItem = new Item(){{
+
+           setId("DELIVERY");
+           setDescriptor(new Descriptor(){{
+               setCode("DELIVERY");
+               setName("DELIVERY");
+           }});
+           setPrice(new Price(){{
+               setValue(0.0);
+               for (ShippingLine shippingLine  : eCommerceOrder.getShippingLines()){
+                   setValue( getValue() + shippingLine.getPrice());
+               }
+               
+           }});
+           setItemQuantity(new ItemQuantity(){{
+               setSelected(new Quantity(){{
+                   setCount(1);
+               }}) ;
+           }});
+           
+        }};
+        if (deliveryItem == null) {
+            deliveryItem = tmpdeliveryItem;
+            order.getItems().add(deliveryItem);
+        }else {
+            deliveryItem.update(tmpdeliveryItem);
+        }
+    }
+    
+    
     
     private void setPayment(Order order, ShopifyOrder eCommerceOrder) {
-        boolean sellerCollected = eCommerceOrder.isPaid();
-        //Seller collected is transmitted to buyer as paid.
-        boolean buyerPaid = order.isPaid();
-        if (buyerPaid || !sellerCollected) {
-            return;
-        }
-        
         Payment payment = order.getPayments().get(0);
-        if (eCommerceOrder.getPaymentTerms() != null) {
-            payment.getParams().setAmount(doubleTypeConverter.valueOf(eCommerceOrder.getPaymentTerms().getAmount()));
-        } else {
-            payment.getParams().setAmount(eCommerceOrder.getTotalPrice());
-        }
+        payment.getParams().setAmount(eCommerceOrder.getTotalPrice());
         
+        LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).updateOrderStatus(order); // Ensure invoices are created.
+
         Invoices invoices = order.getInvoices();
-        if (invoices.isEmpty()){
-            LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).updateOrderStatus(order); // Ensure invoices are created.
-        }
+        boolean paymentConfirmed = eCommerceOrder.isPaid();
+        
         Map<String,PaymentTransaction> paymentTransactionMap = new HashMap<>();
         for (Transaction t : eCommerceOrder.getTransactions()) {
             if (ObjectUtil.equals(t.getStatus(),"success")) {
@@ -681,27 +734,48 @@ public class ECommerceAdaptor extends CommerceAdaptor {
                         setAmount(t.getAmount());
                         setDate(t.getCreatedAt());
                         setTransactionId(t.getId());
-                        setPaymentStatus(PaymentStatus.PAID);
+                        setPaymentStatus(PaymentStatus.COMPLETE);
                     }});
                 }
             }
         }
+        
+        
         List<Invoice> unpaidInvoices = new ArrayList<>();
         for (Invoice invoice : invoices) {
-            if (invoice.getUnpaidAmount().intValue() > 0 ){
+            boolean paid = invoice.getUnpaidAmount().intValue() == 0;
+            if (!paid){
                 unpaidInvoices.add(invoice);
-            }
-            for (PaymentTransaction paymentTransaction : invoice.getPaymentTransactions()) {
-                paymentTransactionMap.remove(paymentTransaction.getTransactionId());
+            }else {
+                for (PaymentTransaction paymentTransaction : invoice.getPaymentTransactions()) {
+                    if (paymentTransaction.getPaymentStatus() == null) {
+                        paymentTransaction.setPaymentStatus(PaymentStatus.PAID);
+                    }else if (paymentTransaction.getPaymentStatus() != PaymentStatus.COMPLETE){
+                        if (paymentTransactionMap.containsKey(paymentTransaction.getTransactionId())) {
+                            paymentTransaction.setPaymentStatus(PaymentStatus.COMPLETE);
+                            paymentTransactionMap.remove(paymentTransaction.getTransactionId());
+                        } else if (paymentConfirmed) {
+                            paymentTransaction.setPaymentStatus(PaymentStatus.COMPLETE);
+                        }
+                    }
+                }
             }
         }
         if (unpaidInvoices.size() == 1){
             for (PaymentTransaction value : paymentTransactionMap.values()) {
                 unpaidInvoices.get(0).getPaymentTransactions().add(value);
             }
-        }else {
+        }else if (unpaidInvoices.size() > 1){
             throw new RuntimeException("Cannot have multiple unpaid invoices!");
         }
+        if (paymentConfirmed){
+            for (Payment orderPayment : order.getPayments()) {
+                if (orderPayment.getStatus() == PaymentStatus.PAID ) {
+                    orderPayment.setStatus(PaymentStatus.COMPLETE);
+                }
+            }
+        }
+        
     }
     
     
@@ -724,7 +798,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         User user = getUser(request);
         ECommerceSDK helper = new ECommerceSDK(user.getCredentials(true,getCredentialAttributes()));
         
-        Location storeLocation = bo.getProviderLocation();
+        Location storeLocation = bo._getProviderLocation();
         
         shopifyOrder.setId(LocalOrderSynchronizerFactory.getInstance().getLocalOrderSynchronizer(getSubscriber()).getLocalOrderId(request.getContext().getTransactionId()));
         
