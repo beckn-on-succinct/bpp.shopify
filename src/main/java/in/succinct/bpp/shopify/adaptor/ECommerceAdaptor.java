@@ -105,13 +105,13 @@ import java.util.Map;
 import java.util.Set;
 
 public class ECommerceAdaptor extends CommerceAdaptor {
-    
     public ECommerceAdaptor(Map<String, String> configuration, Subscriber subscriber) {
         super(configuration, subscriber);
     }
     
     protected Set<String> getCredentialAttributes() {
         return new HashSet<>() {{
+            // Example Attributes 
             add("X-Shopify-Access-Token");
             add("X-Store-Url");
         }};
@@ -163,6 +163,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         }
         response.getMessage().setOrder(convert(helper,appResponse));
     }
+    
     
     @Override
     public void track(Request request, Request response) {
