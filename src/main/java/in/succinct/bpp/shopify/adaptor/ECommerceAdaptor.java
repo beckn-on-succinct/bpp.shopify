@@ -114,6 +114,7 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             // Example Attributes 
             add("X-Shopify-Access-Token");
             add("X-Store-Url");
+            add("X-Hmac-Key");
         }};
     }
     
@@ -1012,6 +1013,9 @@ public class ECommerceAdaptor extends CommerceAdaptor {
         billing.setPhone(source.getPhone());
 
     }
-
-
+    
+    
+    public ECommerceSDK getHelper(User user){
+        return new ECommerceSDK(user.getCredentials(true,getCredentialAttributes()));
+    }
 }

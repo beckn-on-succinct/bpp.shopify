@@ -181,6 +181,10 @@ public class ECommerceSDK {
         return creds.get("X-Store-Url");
     }
     
+    public String getHmacKey(){
+        return creds.get("X-Hmac-Key");
+    }
+    
     private String getAdminApiUrl(){
         Date now = new Date();
         Calendar calendar = Calendar.getInstance();
