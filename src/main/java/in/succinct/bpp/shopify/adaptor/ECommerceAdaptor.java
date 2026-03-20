@@ -146,8 +146,19 @@ public class ECommerceAdaptor extends CommerceAdaptor {
             return;
         }
         response.setMessage(new Message() {{
-            setCatalog(new Catalog());
+            setCatalog(new Catalog() {{
+                setDescriptor(new Descriptor(){{
+                    setCode(Config.instance().getHostName());
+                    setName(getCode());
+                    setShortDesc(getCode());
+                    setLongDesc(getCode());
+                }});
+                
+                setProviders(new Providers());
+                
+            }});
         }});
+        
         //Search is served from network search engine.
     }
     
